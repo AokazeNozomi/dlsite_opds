@@ -1,0 +1,73 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: linux-amd64
+          - os: ubuntu-24.04-arm
+            target: linux-arm64
+          - os: windows-latest
+            target: windows-amd64
+          - os: macos-latest
+            target: macos-arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install system dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc libc6-dev
+
+      - name: Install Python dependencies
+        run: pip install . pyinstaller
+
+      - name: Build executable
+        run: >
+          pyinstaller --onefile --name dlsite-opds
+          --collect-submodules dlsite_opds
+          --collect-submodules uvicorn
+          dlsite_opds/__main__.py
+
+      - name: Rename artifact (Unix)
+        if: runner.os != 'Windows'
+        run: mv dist/dlsite-opds dist/dlsite-opds-${{ matrix.target }}
+
+      - name: Rename artifact (Windows)
+        if: runner.os == 'Windows'
+        run: mv dist/dlsite-opds.exe dist/dlsite-opds-${{ matrix.target }}.exe
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dlsite-opds-${{ matrix.target }}
+          path: dist/dlsite-opds-*
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dlsite-opds-*

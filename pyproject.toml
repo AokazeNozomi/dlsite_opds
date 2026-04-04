@@ -1,0 +1,28 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "dlsite-opds"
+version = "0.1.0"
+description = "OPDS 1.2 server for DLsite Play purchases with OPDS-PSE page streaming"
+requires-python = ">=3.11"
+dependencies = [
+    "cykooz.resizer[pillow]",
+    "dlsite-async[pil]",
+    "fastapi",
+    "python-dotenv",
+    "uvicorn[standard]",
+]
+
+[project.optional-dependencies]
+test = ["httpx", "pytest", "pytest-asyncio"]
+
+[project.scripts]
+dlsite-opds = "dlsite_opds.__main__:main"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+markers = ["e2e: end-to-end tests requiring real DLsite Play credentials"]
+log_cli = true
+log_cli_level = "INFO"
