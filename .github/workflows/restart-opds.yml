@@ -1,0 +1,90 @@
+name: Restart OPDS
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Environment to restart
+        type: choice
+        required: true
+        default: prod
+        options:
+          - prod
+          - dev
+
+concurrency:
+  group: provision-and-deploy-opds-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}-gate
+    permissions:
+      contents: read
+    steps:
+      - name: Await reviewer approval
+        run: echo "Approved for ${{ inputs.environment }}."
+
+  restart:
+    needs: gate
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    permissions:
+      contents: read
+
+    env:
+      DO_DROPLET_NAME: ${{ vars.DO_DROPLET_NAME || 'dlsite-opds' }}
+      APP_PATH: ${{ vars.APP_PATH || '/opt/dlsite-opds' }}
+
+    steps:
+      - name: Validate required secrets
+        env:
+          DIGITALOCEAN_TOKEN: ${{ secrets.DIGITALOCEAN_TOKEN }}
+          SSH_DEPLOY_PRIVATE_KEY: ${{ secrets.SSH_DEPLOY_PRIVATE_KEY }}
+          SSH_HOST_PUBLIC_KEY: ${{ secrets.SSH_HOST_PUBLIC_KEY }}
+        run: |
+          test -n "${DIGITALOCEAN_TOKEN}" || (echo "DIGITALOCEAN_TOKEN secret is required" >&2; exit 1)
+          test -n "${SSH_DEPLOY_PRIVATE_KEY}" || (echo "SSH_DEPLOY_PRIVATE_KEY secret is required" >&2; exit 1)
+          test -n "${SSH_HOST_PUBLIC_KEY}" || (echo "SSH_HOST_PUBLIC_KEY secret is required" >&2; exit 1)
+
+      - name: Install doctl
+        uses: digitalocean/action-doctl@v2.5.2
+        with:
+          token: ${{ secrets.DIGITALOCEAN_TOKEN }}
+          version: 1.159.0
+
+      - name: Look up droplet
+        id: lookup
+        run: |
+          set -euo pipefail
+          ip=$(doctl compute droplet list \
+            --format Name,Status,PublicIPv4 \
+            --no-header \
+            | awk -v name="${DO_DROPLET_NAME}" '$1 == name && $2 == "active" && $3 != "" { print $3; exit }')
+          if [ -z "${ip}" ]; then
+            echo "No active droplet named '${DO_DROPLET_NAME}' found." >&2
+            exit 1
+          fi
+          echo "opds_host=${ip}" >> "${GITHUB_OUTPUT}"
+          echo "Found active droplet at ${ip}"
+
+      - name: Configure SSH
+        env:
+          SSH_DEPLOY_PRIVATE_KEY: ${{ secrets.SSH_DEPLOY_PRIVATE_KEY }}
+          SSH_HOST_PUBLIC_KEY: ${{ secrets.SSH_HOST_PUBLIC_KEY }}
+          OPDS_HOST: ${{ steps.lookup.outputs.opds_host }}
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "${SSH_DEPLOY_PRIVATE_KEY}" > ~/.ssh/opds_deploy_key
+          chmod 600 ~/.ssh/opds_deploy_key
+          printf '%s %s\n' "${OPDS_HOST}" "${SSH_HOST_PUBLIC_KEY}" >> ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+
+      - name: Restart OPDS containers
+        env:
+          OPDS_HOST: ${{ steps.lookup.outputs.opds_host }}
+        run: |
+          ssh -i ~/.ssh/opds_deploy_key deploy@"${OPDS_HOST}" \
+            "cd '${APP_PATH}' && docker compose restart && docker logs --tail 100 dlsite-opds"

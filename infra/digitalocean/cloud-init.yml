@@ -1,0 +1,91 @@
+#cloud-config
+package_update: true
+package_upgrade: false
+disable_root: true
+ssh_pwauth: false
+ssh_deletekeys: false
+
+swap:
+  filename: /swapfile
+  size: {{DO_SWAP_SIZE}}
+  maxsize: {{DO_SWAP_SIZE}}
+
+groups:
+  - docker
+
+users:
+  - default
+  - name: deploy
+    gecos: DLsite OPDS Deploy User
+    shell: /bin/bash
+    lock_passwd: true
+    groups:
+      - docker
+    ssh_authorized_keys:
+      - {{SSH_PUBLIC_KEY_YAML}}
+
+write_files:
+  - path: /usr/local/bin/deploy-dlsite-opds
+    owner: root:root
+    permissions: "0755"
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+
+      APP_DIR={{APP_PATH_SHELL}}
+
+      mkdir -p "$APP_DIR/data"
+      chown -R deploy:deploy "$APP_DIR"
+
+      cd "$APP_DIR"
+
+      if [ ! -f docker-compose.yml ]; then
+        echo "Missing $APP_DIR/docker-compose.yml; sync deploy artifacts before deploying." >&2
+        exit 1
+      fi
+
+      if [ ! -f Caddyfile ]; then
+        echo "Missing $APP_DIR/Caddyfile; sync deploy artifacts before deploying." >&2
+        exit 1
+      fi
+
+      if [ ! -s .env ]; then
+        echo "Missing $APP_DIR/.env; refusing to start the server." >&2
+        exit 1
+      fi
+
+      docker compose pull
+      docker compose up -d
+      docker image prune -f --filter "until=72h"
+      docker logs --tail 100 dlsite-opds
+
+  - path: /etc/sudoers.d/dlsite-opds-deploy
+    owner: root:root
+    permissions: "0440"
+    content: |
+      deploy ALL=(root) NOPASSWD: /usr/local/bin/deploy-dlsite-opds
+
+  - path: /etc/ssh/ssh_host_ed25519_key
+    owner: root:root
+    permissions: "0600"
+    encoding: b64
+    content: {{SSH_HOST_PRIVATE_KEY_B64}}
+
+  - path: /etc/ssh/ssh_host_ed25519_key.pub
+    owner: root:root
+    permissions: "0644"
+    content: {{SSH_HOST_PUBLIC_KEY}}
+
+runcmd:
+  - systemctl restart ssh
+  - apt-get update
+  - apt-get install -y ca-certificates curl git gnupg rsync
+  - install -m 0755 -d /etc/apt/keyrings
+  - curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+  - chmod a+r /etc/apt/keyrings/docker.asc
+  - sh -c 'echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" > /etc/apt/sources.list.d/docker.list'
+  - apt-get update
+  - apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+  - systemctl enable --now docker
+  - mkdir -p {{APP_PATH_SHELL}}/data
+  - chown -R deploy:deploy {{APP_PATH_SHELL}}

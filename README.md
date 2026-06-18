@@ -13,9 +13,21 @@ support for reading comics and manga page by page.
 - **Descrambling** -- DLsite Play encrypted images are decoded automatically
 - In-memory caching with background pre-fetching of page counts
 
+## Deployment (DigitalOcean)
+
+Automated deploys to DigitalOcean droplets run via GitHub Actions: pytest CI,
+GHCR image build, gated provision, and Docker Compose with Caddy TLS termination.
+
+See [INFRA.md](INFRA.md) for secrets, DNS, and environment setup. After deploy,
+add this catalog URL in your OPDS reader:
+
+```text
+https://<your-domain>/opds
+```
+
 ## Quick Start (Docker)
 
-The recommended way to run dlsite-opds is with Docker.
+The recommended way to run dlsite-opds locally is with Docker.
 
 ### Docker Compose (recommended)
 
@@ -110,7 +122,7 @@ Requires **Python 3.11+** and a DLsite account with purchased works.
 pip install -e .
 ```
 
-2. **Start the server**
+1. **Start the server**
 
 ```bash
 dlsite-opds

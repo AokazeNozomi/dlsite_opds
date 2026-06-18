@@ -1,0 +1,304 @@
+name: Provision and Deploy OPDS
+
+on:
+  push:
+  workflow_dispatch:
+
+concurrency:
+  group: provision-and-deploy-opds-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: pip install -e ".[test]"
+      - run: pytest
+
+  build-and-push:
+    needs: ci
+    if: github.ref_name == 'main' || github.ref_name == 'prod'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: type=ref,event=branch
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  gate:
+    needs: build-and-push
+    if: github.ref_name == 'main' || github.ref_name == 'prod'
+    runs-on: ubuntu-latest
+    environment: ${{ github.ref_name == 'prod' && 'prod-gate' || 'dev-gate' }}
+    permissions:
+      contents: read
+    steps:
+      - name: Await reviewer approval
+        run: echo "Approved for ${{ github.ref_name }}."
+
+  discover:
+    needs: gate
+    runs-on: ubuntu-latest
+    environment: ${{ github.ref_name == 'prod' && 'prod' || 'dev' }}
+    permissions:
+      contents: read
+
+    env:
+      DO_DROPLET_NAME: ${{ vars.DO_DROPLET_NAME || 'dlsite-opds' }}
+
+    outputs:
+      droplet_exists: ${{ steps.lookup.outputs.droplet_exists }}
+      opds_host: ${{ steps.lookup.outputs.opds_host }}
+      droplet_id: ${{ steps.lookup.outputs.droplet_id }}
+
+    steps:
+      - name: Validate DigitalOcean token
+        env:
+          DIGITALOCEAN_TOKEN: ${{ secrets.DIGITALOCEAN_TOKEN }}
+        run: test -n "${DIGITALOCEAN_TOKEN}" || (echo "DIGITALOCEAN_TOKEN secret is required" >&2; exit 1)
+
+      - name: Install doctl
+        uses: digitalocean/action-doctl@v2.5.2
+        with:
+          token: ${{ secrets.DIGITALOCEAN_TOKEN }}
+          version: 1.159.0
+
+      - name: Look up existing droplet
+        id: lookup
+        run: |
+          set -euo pipefail
+          row=$(doctl compute droplet list \
+            --format Name,Status,PublicIPv4,ID \
+            --no-header \
+            | awk -v name="${DO_DROPLET_NAME}" '$1 == name && $2 == "active" && $3 != "" { print $3, $4; exit }')
+          if [ -n "${row}" ]; then
+            ip=$(echo "${row}" | awk '{print $1}')
+            id=$(echo "${row}" | awk '{print $2}')
+            {
+              echo "droplet_exists=true"
+              echo "opds_host=${ip}"
+              echo "droplet_id=${id}"
+            } >> "${GITHUB_OUTPUT}"
+            echo "Found active droplet ${id} at ${ip} — provision will be skipped."
+          else
+            {
+              echo "droplet_exists=false"
+              echo "opds_host="
+              echo "droplet_id="
+            } >> "${GITHUB_OUTPUT}"
+            echo "No active droplet named '${DO_DROPLET_NAME}' found — provision will run."
+          fi
+
+  provision:
+    needs: discover
+    if: needs.discover.outputs.droplet_exists != 'true'
+    runs-on: ubuntu-latest
+    environment: ${{ github.ref_name == 'prod' && 'prod' || 'dev' }}
+    permissions:
+      contents: read
+
+    env:
+      DEPLOY_BRANCH: ${{ github.ref_name }}
+      APP_PATH: ${{ vars.APP_PATH || '/opt/dlsite-opds' }}
+      DO_REGION: ${{ vars.DO_REGION || 'nyc3' }}
+      DO_SIZE: ${{ vars.DO_SIZE || 's-1vcpu-1gb' }}
+      DO_IMAGE: ${{ vars.DO_IMAGE || 'ubuntu-24-04-x64' }}
+      DO_DROPLET_NAME: ${{ vars.DO_DROPLET_NAME || 'dlsite-opds' }}
+      DO_ENABLE_BACKUPS: ${{ vars.DO_ENABLE_BACKUPS || 'false' }}
+      DO_SWAP_SIZE: ${{ vars.DO_SWAP_SIZE || '1G' }}
+      DO_PROJECT_NAME: ${{ vars.DO_PROJECT_NAME || 'DLsite OPDS' }}
+      DO_PROJECT_PURPOSE: ${{ vars.DO_PROJECT_PURPOSE || 'Service or API' }}
+      DO_PROJECT_ENVIRONMENT: ${{ vars.DO_PROJECT_ENVIRONMENT || 'Production' }}
+      DO_PROJECT_DESCRIPTION: ${{ vars.DO_PROJECT_DESCRIPTION }}
+
+    outputs:
+      opds_host: ${{ steps.provision.outputs.opds_host }}
+      droplet_id: ${{ steps.provision.outputs.droplet_id }}
+
+    steps:
+      - name: Validate required secrets
+        env:
+          DIGITALOCEAN_TOKEN: ${{ secrets.DIGITALOCEAN_TOKEN }}
+          SSH_DEPLOY_PUBLIC_KEY: ${{ secrets.SSH_DEPLOY_PUBLIC_KEY }}
+          SSH_HOST_PRIVATE_KEY: ${{ secrets.SSH_HOST_PRIVATE_KEY }}
+          SSH_HOST_PUBLIC_KEY: ${{ secrets.SSH_HOST_PUBLIC_KEY }}
+        run: |
+          test -n "${DIGITALOCEAN_TOKEN}" || (echo "DIGITALOCEAN_TOKEN secret is required" >&2; exit 1)
+          test -n "${SSH_DEPLOY_PUBLIC_KEY}" || (echo "SSH_DEPLOY_PUBLIC_KEY secret is required" >&2; exit 1)
+          test -n "${SSH_HOST_PRIVATE_KEY}" || (echo "SSH_HOST_PRIVATE_KEY secret is required" >&2; exit 1)
+          test -n "${SSH_HOST_PUBLIC_KEY}" || (echo "SSH_HOST_PUBLIC_KEY secret is required" >&2; exit 1)
+
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.DEPLOY_BRANCH }}
+
+      - name: Install doctl
+        uses: digitalocean/action-doctl@v2.5.2
+        with:
+          token: ${{ secrets.DIGITALOCEAN_TOKEN }}
+          version: 1.159.0
+
+      - name: Validate provisioning script
+        run: bash -n scripts/provision-digitalocean.sh
+
+      - name: Provision DigitalOcean VPS
+        id: provision
+        env:
+          SSH_DEPLOY_PUBLIC_KEY: ${{ secrets.SSH_DEPLOY_PUBLIC_KEY }}
+          SSH_HOST_PRIVATE_KEY: ${{ secrets.SSH_HOST_PRIVATE_KEY }}
+          SSH_HOST_PUBLIC_KEY: ${{ secrets.SSH_HOST_PUBLIC_KEY }}
+        run: bash scripts/provision-digitalocean.sh
+
+  deploy:
+    needs: [discover, provision]
+    if: |
+      always()
+      && needs.discover.result == 'success'
+      && (needs.provision.result == 'success' || needs.provision.result == 'skipped')
+    runs-on: ubuntu-latest
+    environment: ${{ github.ref_name == 'prod' && 'prod' || 'dev' }}
+    permissions:
+      contents: read
+
+    env:
+      DEPLOY_BRANCH: ${{ github.ref_name }}
+      APP_PATH: ${{ vars.APP_PATH || '/opt/dlsite-opds' }}
+      OPDS_HOST: ${{ needs.provision.outputs.opds_host || needs.discover.outputs.opds_host }}
+
+    steps:
+      - name: Validate required secrets
+        env:
+          SSH_DEPLOY_PRIVATE_KEY: ${{ secrets.SSH_DEPLOY_PRIVATE_KEY }}
+          SSH_HOST_PUBLIC_KEY: ${{ secrets.SSH_HOST_PUBLIC_KEY }}
+          OPDS_DOMAIN: ${{ vars.OPDS_DOMAIN }}
+          DLSITE_OPDS_BASE_URL: ${{ vars.DLSITE_OPDS_BASE_URL }}
+        run: |
+          test -n "${SSH_DEPLOY_PRIVATE_KEY}" || (echo "SSH_DEPLOY_PRIVATE_KEY secret is required" >&2; exit 1)
+          test -n "${SSH_HOST_PUBLIC_KEY}" || (echo "SSH_HOST_PUBLIC_KEY secret is required" >&2; exit 1)
+          test -n "${OPDS_DOMAIN}" || (echo "OPDS_DOMAIN variable is required on the environment" >&2; exit 1)
+          test -n "${DLSITE_OPDS_BASE_URL}" || (echo "DLSITE_OPDS_BASE_URL variable is required on the environment" >&2; exit 1)
+
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.DEPLOY_BRANCH }}
+
+      - name: Configure SSH
+        env:
+          SSH_DEPLOY_PRIVATE_KEY: ${{ secrets.SSH_DEPLOY_PRIVATE_KEY }}
+          SSH_HOST_PUBLIC_KEY: ${{ secrets.SSH_HOST_PUBLIC_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "${SSH_DEPLOY_PRIVATE_KEY}" > ~/.ssh/opds_deploy_key
+          chmod 600 ~/.ssh/opds_deploy_key
+
+          printf '%s %s\n' "${OPDS_HOST}" "${SSH_HOST_PUBLIC_KEY}" >> ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+
+          for attempt in {1..30}; do
+            if ssh_output=$(ssh -i ~/.ssh/opds_deploy_key -o BatchMode=yes -o ConnectTimeout=5 deploy@"${OPDS_HOST}" true 2>&1); then
+              exit 0
+            fi
+            echo "Waiting for SSH (attempt ${attempt}/30): ${ssh_output}"
+            sleep 10
+          done
+
+          echo "Timed out waiting for SSH connectivity" >&2
+          exit 1
+
+      - name: Wait for cloud-init
+        run: |
+          for attempt in {1..30}; do
+            if ssh -i ~/.ssh/opds_deploy_key -o ConnectTimeout=10 deploy@"${OPDS_HOST}" "cloud-init status --wait && test -x /usr/local/bin/deploy-dlsite-opds"; then
+              exit 0
+            fi
+
+            echo "Waiting for cloud-init..."
+            sleep 10
+          done
+
+          echo "Timed out waiting for cloud-init" >&2
+          exit 1
+
+      - name: Build server environment
+        env:
+          OPDS_DOMAIN: ${{ vars.OPDS_DOMAIN }}
+          DLSITE_OPDS_BASE_URL: ${{ vars.DLSITE_OPDS_BASE_URL }}
+          OPDS_CACHE_TTL: ${{ vars.OPDS_CACHE_TTL }}
+          OPDS_PAGE_SIZE: ${{ vars.OPDS_PAGE_SIZE }}
+          OPDS_IMAGE_CACHE_TTL: ${{ vars.OPDS_IMAGE_CACHE_TTL }}
+          OPDS_PREFETCH_AHEAD: ${{ vars.OPDS_PREFETCH_AHEAD }}
+        run: |
+          umask 077
+          {
+            printf 'OPDS_DOMAIN=%s\n' "${OPDS_DOMAIN}"
+            printf 'IMAGE_TAG=%s\n' "${{ github.ref_name }}"
+            printf 'DLSITE_OPDS_HOST=0.0.0.0\n'
+            printf 'DLSITE_OPDS_PORT=2580\n'
+            printf 'DLSITE_OPDS_DATA_DIR=/data\n'
+            printf 'DLSITE_OPDS_BASE_URL=%s\n' "${DLSITE_OPDS_BASE_URL}"
+            printf 'DLSITE_OPDS_CACHE_TTL=%s\n' "${OPDS_CACHE_TTL:-300}"
+            printf 'DLSITE_OPDS_PAGE_SIZE=%s\n' "${OPDS_PAGE_SIZE:-30}"
+            printf 'DLSITE_OPDS_IMAGE_CACHE_TTL=%s\n' "${OPDS_IMAGE_CACHE_TTL:-86400}"
+            printf 'DLSITE_OPDS_PREFETCH_AHEAD=%s\n' "${OPDS_PREFETCH_AHEAD:-5}"
+          } > "${RUNNER_TEMP}/opds.env"
+
+      - name: Sync deploy artifacts to VPS
+        run: |
+          ssh -i ~/.ssh/opds_deploy_key deploy@"${OPDS_HOST}" "mkdir -p '${APP_PATH}'"
+          rsync -az \
+            -e "ssh -i ~/.ssh/opds_deploy_key" \
+            docker-compose.yml deploy@"${OPDS_HOST}":"${APP_PATH}/"
+          rsync -az \
+            -e "ssh -i ~/.ssh/opds_deploy_key" \
+            infra/digitalocean/Caddyfile deploy@"${OPDS_HOST}":"${APP_PATH}/Caddyfile"
+
+      - name: Write server environment
+        run: |
+          ssh -i ~/.ssh/opds_deploy_key deploy@"${OPDS_HOST}" "umask 077 && cat > '${APP_PATH}/.env.tmp' && mv '${APP_PATH}/.env.tmp' '${APP_PATH}/.env'" < "${RUNNER_TEMP}/opds.env"
+
+      - name: Log in to GHCR on VPS
+        env:
+          GHCR_PULL_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
+        run: |
+          if [ -n "${GHCR_PULL_TOKEN}" ]; then
+            ssh -i ~/.ssh/opds_deploy_key deploy@"${OPDS_HOST}" \
+              "echo '${GHCR_PULL_TOKEN}' | docker login ghcr.io -u '${{ github.actor }}' --password-stdin"
+          fi
+
+      - name: Deploy OPDS
+        run: |
+          ssh -i ~/.ssh/opds_deploy_key deploy@"${OPDS_HOST}" "sudo /usr/local/bin/deploy-dlsite-opds"

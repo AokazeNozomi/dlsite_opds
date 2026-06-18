@@ -1,0 +1,3 @@
+{$OPDS_DOMAIN} {
+	reverse_proxy dlsite-opds:2580
+}
