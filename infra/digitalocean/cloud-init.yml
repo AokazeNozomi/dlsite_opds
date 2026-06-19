@@ -25,6 +25,47 @@ users:
       - {{SSH_PUBLIC_KEY_YAML}}
 
 write_files:
+  - path: /usr/local/bin/reload-dlsite-opds-caddy
+    owner: root:root
+    permissions: "0755"
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+
+      CADDY_DIR=/opt/dlsite-opds-caddy
+      CADDYFILE="$CADDY_DIR/Caddyfile"
+
+      mkdir -p "$CADDY_DIR"
+      chown -R deploy:deploy "$CADDY_DIR"
+
+      {
+        for app_dir in /opt/dlsite-opds-nightly /opt/dlsite-opds; do
+          if [ ! -s "$app_dir/.env" ]; then
+            continue
+          fi
+
+          # shellcheck disable=SC1090
+          set -a
+          source "$app_dir/.env"
+          set +a
+
+          if [ -z "${OPDS_DOMAIN:-}" ] || [ -z "${CONTAINER_NAME:-}" ]; then
+            echo "Skipping $app_dir: OPDS_DOMAIN and CONTAINER_NAME are required in .env" >&2
+            continue
+          fi
+
+          printf '%s {\n    reverse_proxy %s:2580\n}\n\n' "$OPDS_DOMAIN" "$CONTAINER_NAME"
+        done
+      } > "$CADDYFILE"
+
+      if [ ! -s "$CADDYFILE" ]; then
+        echo "No app environments configured; refusing to start Caddy." >&2
+        exit 1
+      fi
+
+      cd "$CADDY_DIR"
+      docker compose -f docker-compose.caddy.yml up -d
+
   - path: /usr/local/bin/deploy-dlsite-opds
     owner: root:root
     permissions: "0755"
@@ -32,20 +73,20 @@ write_files:
       #!/usr/bin/env bash
       set -euo pipefail
 
-      APP_DIR={{APP_PATH_SHELL}}
+      if [ "$#" -ne 1 ]; then
+        echo "Usage: deploy-dlsite-opds <app-path>" >&2
+        exit 1
+      fi
+
+      APP_DIR="$1"
 
       mkdir -p "$APP_DIR/data"
       chown -R deploy:deploy "$APP_DIR"
 
       cd "$APP_DIR"
 
-      if [ ! -f docker-compose.yml ]; then
-        echo "Missing $APP_DIR/docker-compose.yml; sync deploy artifacts before deploying." >&2
-        exit 1
-      fi
-
-      if [ ! -f Caddyfile ]; then
-        echo "Missing $APP_DIR/Caddyfile; sync deploy artifacts before deploying." >&2
+      if [ ! -f docker-compose.app.yml ]; then
+        echo "Missing $APP_DIR/docker-compose.app.yml; sync deploy artifacts before deploying." >&2
         exit 1
       fi
 
@@ -54,16 +95,29 @@ write_files:
         exit 1
       fi
 
-      docker compose pull
-      docker compose up -d
+      # shellcheck disable=SC1091
+      set -a
+      source .env
+      set +a
+
+      if [ -z "${CONTAINER_NAME:-}" ]; then
+        echo "CONTAINER_NAME is required in $APP_DIR/.env" >&2
+        exit 1
+      fi
+
+      docker compose -f docker-compose.app.yml pull
+      docker compose -f docker-compose.app.yml up -d
       docker image prune -f --filter "until=72h"
-      docker logs --tail 100 dlsite-opds
+      docker logs --tail 100 "$CONTAINER_NAME"
+
+      /usr/local/bin/reload-dlsite-opds-caddy
 
   - path: /etc/sudoers.d/dlsite-opds-deploy
     owner: root:root
     permissions: "0440"
     content: |
       deploy ALL=(root) NOPASSWD: /usr/local/bin/deploy-dlsite-opds
+      deploy ALL=(root) NOPASSWD: /usr/local/bin/reload-dlsite-opds-caddy
 
   - path: /etc/ssh/ssh_host_ed25519_key
     owner: root:root
@@ -87,5 +141,6 @@ runcmd:
   - apt-get update
   - apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
   - systemctl enable --now docker
-  - mkdir -p {{APP_PATH_SHELL}}/data
-  - chown -R deploy:deploy {{APP_PATH_SHELL}}
+  - docker network create opds_shared || true
+  - mkdir -p /opt/dlsite-opds-caddy /opt/dlsite-opds-nightly/data /opt/dlsite-opds/data
+  - chown -R deploy:deploy /opt/dlsite-opds-caddy /opt/dlsite-opds-nightly /opt/dlsite-opds

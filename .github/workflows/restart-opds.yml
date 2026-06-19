@@ -35,7 +35,8 @@ jobs:
 
     env:
       DO_DROPLET_NAME: ${{ vars.DO_DROPLET_NAME || 'dlsite-opds' }}
-      APP_PATH: ${{ vars.APP_PATH || '/opt/dlsite-opds' }}
+      APP_PATH: ${{ vars.APP_PATH || (inputs.environment == 'prod' && '/opt/dlsite-opds' || '/opt/dlsite-opds-nightly') }}
+      CONTAINER_NAME: ${{ inputs.environment == 'prod' && 'dlsite-opds' || 'dlsite-opds-nightly' }}
 
     steps:
       - name: Validate required secrets
@@ -87,4 +88,4 @@ jobs:
           OPDS_HOST: ${{ steps.lookup.outputs.opds_host }}
         run: |
           ssh -i ~/.ssh/opds_deploy_key deploy@"${OPDS_HOST}" \
-            "cd '${APP_PATH}' && docker compose restart && docker logs --tail 100 dlsite-opds"
+            "cd '${APP_PATH}' && docker compose -f docker-compose.app.yml restart && docker logs --tail 100 '${CONTAINER_NAME}'"

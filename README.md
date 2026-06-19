@@ -15,11 +15,8 @@ support for reading comics and manga page by page.
 
 ## Deployment (DigitalOcean)
 
-Automated deploys to DigitalOcean droplets run via GitHub Actions: pytest CI,
-GHCR image build, gated provision, and Docker Compose with Caddy TLS termination.
-
-See [INFRA.md](INFRA.md) for secrets, DNS, and environment setup. After deploy,
-add this catalog URL in your OPDS reader:
+GitHub Actions deploys nightly (`main`) and prod (`prod`) on one droplet with
+shared Caddy TLS. Setup: [INFRA.md](INFRA.md). OPDS catalog:
 
 ```text
 https://<your-domain>/opds

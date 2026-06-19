@@ -1,0 +1,31 @@
+services:
+  app:
+    image: ghcr.io/aokazenozomi/dlsite_opds:${IMAGE_TAG:-main}
+    container_name: ${CONTAINER_NAME}
+    restart: always
+    env_file: .env
+    volumes:
+      - ./data:/data
+    expose:
+      - "2580"
+    networks:
+      - opds_shared
+    healthcheck:
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://localhost:2580/healthz')
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+networks:
+  opds_shared:
+    external: true

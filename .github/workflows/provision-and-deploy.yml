@@ -70,7 +70,6 @@ jobs:
   discover:
     needs: gate
     runs-on: ubuntu-latest
-    environment: ${{ github.ref_name == 'prod' && 'prod' || 'dev' }}
     permissions:
       contents: read
 
@@ -124,13 +123,11 @@ jobs:
     needs: discover
     if: needs.discover.outputs.droplet_exists != 'true'
     runs-on: ubuntu-latest
-    environment: ${{ github.ref_name == 'prod' && 'prod' || 'dev' }}
     permissions:
       contents: read
 
     env:
       DEPLOY_BRANCH: ${{ github.ref_name }}
-      APP_PATH: ${{ vars.APP_PATH || '/opt/dlsite-opds' }}
       DO_REGION: ${{ vars.DO_REGION || 'nyc3' }}
       DO_SIZE: ${{ vars.DO_SIZE || 's-1vcpu-1gb' }}
       DO_IMAGE: ${{ vars.DO_IMAGE || 'ubuntu-24-04-x64' }}
@@ -189,12 +186,17 @@ jobs:
       && (needs.provision.result == 'success' || needs.provision.result == 'skipped')
     runs-on: ubuntu-latest
     environment: ${{ github.ref_name == 'prod' && 'prod' || 'dev' }}
+    concurrency:
+      group: provision-and-deploy-opds-droplet
+      cancel-in-progress: false
     permissions:
       contents: read
 
     env:
       DEPLOY_BRANCH: ${{ github.ref_name }}
-      APP_PATH: ${{ vars.APP_PATH || '/opt/dlsite-opds' }}
+      APP_PATH: ${{ vars.APP_PATH || (github.ref_name == 'prod' && '/opt/dlsite-opds' || '/opt/dlsite-opds-nightly') }}
+      CADDY_PATH: /opt/dlsite-opds-caddy
+      CONTAINER_NAME: ${{ github.ref_name == 'prod' && 'dlsite-opds' || 'dlsite-opds-nightly' }}
       OPDS_HOST: ${{ needs.provision.outputs.opds_host || needs.discover.outputs.opds_host }}
 
     steps:
@@ -242,7 +244,8 @@ jobs:
       - name: Wait for cloud-init
         run: |
           for attempt in {1..30}; do
-            if ssh -i ~/.ssh/opds_deploy_key -o ConnectTimeout=10 deploy@"${OPDS_HOST}" "cloud-init status --wait && test -x /usr/local/bin/deploy-dlsite-opds"; then
+            if ssh -i ~/.ssh/opds_deploy_key -o ConnectTimeout=10 deploy@"${OPDS_HOST}" \
+              "cloud-init status --wait && test -x /usr/local/bin/deploy-dlsite-opds && test -x /usr/local/bin/reload-dlsite-opds-caddy"; then
               exit 0
             fi
 
@@ -265,6 +268,7 @@ jobs:
           umask 077
           {
             printf 'OPDS_DOMAIN=%s\n' "${OPDS_DOMAIN}"
+            printf 'CONTAINER_NAME=%s\n' "${CONTAINER_NAME}"
             printf 'IMAGE_TAG=%s\n' "${{ github.ref_name }}"
             printf 'DLSITE_OPDS_HOST=0.0.0.0\n'
             printf 'DLSITE_OPDS_PORT=2580\n'
@@ -278,13 +282,13 @@ jobs:
 
       - name: Sync deploy artifacts to VPS
         run: |
-          ssh -i ~/.ssh/opds_deploy_key deploy@"${OPDS_HOST}" "mkdir -p '${APP_PATH}'"
+          ssh -i ~/.ssh/opds_deploy_key deploy@"${OPDS_HOST}" "mkdir -p '${APP_PATH}' '${CADDY_PATH}'"
           rsync -az \
             -e "ssh -i ~/.ssh/opds_deploy_key" \
-            docker-compose.yml deploy@"${OPDS_HOST}":"${APP_PATH}/"
+            docker-compose.app.yml deploy@"${OPDS_HOST}":"${APP_PATH}/"
           rsync -az \
             -e "ssh -i ~/.ssh/opds_deploy_key" \
-            infra/digitalocean/Caddyfile deploy@"${OPDS_HOST}":"${APP_PATH}/Caddyfile"
+            infra/digitalocean/docker-compose.caddy.yml deploy@"${OPDS_HOST}":"${CADDY_PATH}/"
 
       - name: Write server environment
         run: |
@@ -301,4 +305,4 @@ jobs:
 
       - name: Deploy OPDS
         run: |
-          ssh -i ~/.ssh/opds_deploy_key deploy@"${OPDS_HOST}" "sudo /usr/local/bin/deploy-dlsite-opds"
+          ssh -i ~/.ssh/opds_deploy_key deploy@"${OPDS_HOST}" "sudo /usr/local/bin/deploy-dlsite-opds '${APP_PATH}'"

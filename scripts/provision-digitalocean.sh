@@ -49,13 +49,7 @@ DO_PROJECT_NAME="${DO_PROJECT_NAME:-DLsite OPDS}"
 DO_PROJECT_PURPOSE="${DO_PROJECT_PURPOSE:-Service or API}"
 DO_PROJECT_ENVIRONMENT="${DO_PROJECT_ENVIRONMENT:-Production}"
 DO_PROJECT_DESCRIPTION="${DO_PROJECT_DESCRIPTION:-}"
-APP_PATH="${APP_PATH:-/opt/dlsite-opds}"
 DO_SWAP_SIZE="${DO_SWAP_SIZE:-1G}"
-
-if [[ ! "$APP_PATH" =~ ^/[A-Za-z0-9._/-]+$ ]]; then
-  echo "APP_PATH must be an absolute path containing only letters, numbers, dots, underscores, dashes, and slashes" >&2
-  exit 1
-fi
 
 if [[ ! "$DO_SWAP_SIZE" =~ ^(0|[1-9][0-9]*[KMG]?)$ ]]; then
   echo "DO_SWAP_SIZE must match ^(0|[1-9][0-9]*[KMG]?)$ (e.g. 0 to disable, 512M, 1G)" >&2
@@ -74,17 +68,14 @@ printf '%s\n' "$SSH_DEPLOY_PUBLIC_KEY" > "$public_key_file"
 
 ssh_key_fingerprint="$(ssh-keygen -E md5 -lf "$public_key_file" | awk '{print $2}' | sed 's/^MD5://')"
 ssh_public_key_yaml="$(yaml_quote "$SSH_DEPLOY_PUBLIC_KEY")"
-app_path_shell="'$APP_PATH'"
 ssh_host_private_key_b64="$(printf '%s' "$SSH_HOST_PRIVATE_KEY" | base64 -w0)"
 
 SSH_PUBLIC_KEY_YAML="$ssh_public_key_yaml" \
-APP_PATH_SHELL="$app_path_shell" \
 SSH_HOST_PRIVATE_KEY_B64="$ssh_host_private_key_b64" \
 SSH_HOST_PUBLIC_KEY="$SSH_HOST_PUBLIC_KEY" \
 DO_SWAP_SIZE="$DO_SWAP_SIZE" \
 perl -0pe '
   s/\{\{SSH_PUBLIC_KEY_YAML\}\}/$ENV{SSH_PUBLIC_KEY_YAML}/g;
-  s/\{\{APP_PATH_SHELL\}\}/$ENV{APP_PATH_SHELL}/g;
   s/\{\{SSH_HOST_PRIVATE_KEY_B64\}\}/$ENV{SSH_HOST_PRIVATE_KEY_B64}/g;
   s/\{\{SSH_HOST_PUBLIC_KEY\}\}/$ENV{SSH_HOST_PUBLIC_KEY}/g;
   s/\{\{DO_SWAP_SIZE\}\}/$ENV{DO_SWAP_SIZE}/g;
