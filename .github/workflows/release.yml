@@ -23,9 +23,9 @@ jobs:
             target: macos-arm64
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.13"
 
@@ -55,7 +55,7 @@ jobs:
         if: runner.os == 'Windows'
         run: mv dist/dlsite-opds.exe dist/dlsite-opds-${{ matrix.target }}.exe
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: dlsite-opds-${{ matrix.target }}
           path: dist/dlsite-opds-*
@@ -64,7 +64,7 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           merge-multiple: true
 
