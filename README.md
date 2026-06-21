@@ -67,6 +67,8 @@ reference, and development setup: **[DEVELOPERS.md](DEVELOPERS.md)**.
 
 DigitalOcean CI/CD with Caddy TLS: **[INFRA.md](INFRA.md)**.
 
+Promote nightly to prod: **[create PR (`main` → `prod`)](https://github.com/AokazeNozomi/dlsite_opds/compare/prod...main?expand=1)**.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
