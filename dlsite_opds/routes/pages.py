@@ -19,6 +19,41 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+async def _prepare_page_source(
+    loop: asyncio.AbstractEventLoop,
+    executor: ThreadPoolExecutor,
+    image_bytes: bytes,
+    playfile: object,
+) -> object:
+    """Decode/descramble a page; map processing errors to HTTP 502."""
+    try:
+        return await loop.run_in_executor(
+            executor, prepare_source_image, image_bytes, playfile
+        )
+    except Exception as exc:
+        logger.exception("Failed to prepare page source image")
+        raise HTTPException(
+            status_code=502, detail="Image processing failed"
+        ) from exc
+
+
+async def _encode_page_jpeg(
+    loop: asyncio.AbstractEventLoop,
+    executor: ThreadPoolExecutor,
+    source_im: object,
+    max_width: int | None,
+) -> bytes:
+    try:
+        return await loop.run_in_executor(
+            executor, resize_and_encode, source_im, max_width
+        )
+    except Exception as exc:
+        logger.exception("Failed to encode page JPEG")
+        raise HTTPException(
+            status_code=502, detail="Image processing failed"
+        ) from exc
+
+
 async def prefetch_pages(
     app_state: object,
     client: DlsiteClient,
@@ -125,22 +160,12 @@ async def pse_page(
         logger.exception("Failed to resolve work data for %s", product_id)
         raise HTTPException(status_code=502, detail="Upstream download failed")
 
-    if len(data.chapters) > 1 and chapter is None:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "chapter query parameter is required for multi-chapter works; "
-                f"available chapters: {[ch.key for ch in data.chapters]}"
-            ),
-        )
-
-    if chapter is not None:
-        try:
-            chapter_pages = data.pages_for_chapter(chapter)
-        except KeyError:
-            raise HTTPException(status_code=404, detail="Chapter not found")
-        if page < 0 or page >= len(chapter_pages):
-            raise HTTPException(status_code=404, detail="Page not found")
+    try:
+        chapter_pages = data.pages_for_chapter(chapter)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Chapter not found")
+    if page < 0 or page >= len(chapter_pages):
+        raise HTTPException(status_code=404, detail="Page not found")
 
     cached = await asyncio.to_thread(
         cache.get, product_id, page, max_width, chapter
@@ -171,14 +196,12 @@ async def pse_page(
             )
             raise HTTPException(status_code=502, detail="Upstream download failed")
 
-        source_im = await loop.run_in_executor(
-            executor, prepare_source_image, image_bytes, playfile
+        source_im = await _prepare_page_source(
+            loop, executor, image_bytes, playfile
         )
         source_cache.put(product_id, page, source_im, chapter=chapter)
 
-    jpeg = await loop.run_in_executor(
-        executor, resize_and_encode, source_im, max_width
-    )
+    jpeg = await _encode_page_jpeg(loop, executor, source_im, max_width)
 
     await asyncio.to_thread(
         cache.put, product_id, page, max_width, jpeg, chapter

@@ -545,7 +545,7 @@ class TestPurchasesFeed:
 
 
 class TestMultiChapterFeeds:
-    def test_multi_chapter_work_gets_subsection_not_pse(self) -> None:
+    def test_multi_chapter_work_gets_direct_pse_link(self) -> None:
         w = _make_work(work_type=WorkType.MANGA)
         xml = build_purchases_feed(
             works=[(w, datetime(2024, 6, 1, tzinfo=timezone.utc))],
@@ -566,9 +566,10 @@ class TestMultiChapterFeeds:
             l for l in links
             if "vaemendis.net/opds-pse/stream" in (l.get("rel") or "")
         ]
-        assert len(subsection) == 1
-        assert "/opds/work/BJ370220" in (subsection[0].get("href") or "")
-        assert len(pse) == 0
+        assert len(subsection) == 0
+        assert len(pse) == 1
+        assert "/pse/BJ370220" in (pse[0].get("href") or "")
+        assert pse[0].get(f"{PSE}count") == "42"
 
     def test_chapter_feed_lists_chapters_with_pse_links(self) -> None:
         w = _make_work()

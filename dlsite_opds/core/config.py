@@ -17,6 +17,9 @@ class Settings:
     page_size: int = 30
     image_cache_ttl: int = 86400
     prefetch_ahead: int = 5
+    cover_concurrency: int = 4
+    cover_fetch_retries: int = 3
+    cover_retry_delay: float = 0.5
 
     @property
     def resolved_base_url(self) -> str:
@@ -53,4 +56,7 @@ def load_settings() -> Settings:
         page_size=int(os.getenv("DLSITE_OPDS_PAGE_SIZE", "30")),
         image_cache_ttl=int(os.getenv("DLSITE_OPDS_IMAGE_CACHE_TTL", "86400")),
         prefetch_ahead=int(os.getenv("DLSITE_OPDS_PREFETCH_AHEAD", "5")),
+        cover_concurrency=int(os.getenv("DLSITE_OPDS_COVER_CONCURRENCY", "4")),
+        cover_fetch_retries=int(os.getenv("DLSITE_OPDS_COVER_FETCH_RETRIES", "3")),
+        cover_retry_delay=float(os.getenv("DLSITE_OPDS_COVER_RETRY_DELAY", "0.5")),
     )

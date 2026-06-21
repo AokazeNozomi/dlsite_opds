@@ -79,6 +79,51 @@ class ImageCache:
             except OSError:
                 pass
 
+    def _cover_path(self, product_id: str) -> Path:
+        digest = hashlib.sha256(f"cover:{product_id}".encode()).hexdigest()
+        return self._dir / f"{digest}.cover"
+
+    def _cover_meta_path(self, product_id: str) -> Path:
+        return self._cover_path(product_id).with_suffix(".cover.meta")
+
+    def get_cover(self, product_id: str) -> tuple[bytes, str] | None:
+        path = self._cover_path(product_id)
+        meta_path = self._cover_meta_path(product_id)
+        try:
+            stat = path.stat()
+        except FileNotFoundError:
+            return None
+
+        if time.time() - stat.st_mtime > self._ttl:
+            path.unlink(missing_ok=True)
+            meta_path.unlink(missing_ok=True)
+            return None
+
+        try:
+            body = path.read_bytes()
+            content_type = meta_path.read_text(encoding="utf-8").strip()
+        except OSError:
+            return None
+        return body, content_type or "image/jpeg"
+
+    def put_cover(self, product_id: str, data: bytes, content_type: str) -> None:
+        path = self._cover_path(product_id)
+        meta_path = self._cover_meta_path(product_id)
+        try:
+            fd, tmp = tempfile.mkstemp(dir=self._dir, suffix=".tmp")
+            try:
+                os.write(fd, data)
+            finally:
+                os.close(fd)
+            os.replace(tmp, path)
+            meta_path.write_text(content_type, encoding="utf-8")
+        except OSError as exc:
+            logger.warning("Failed to write cover cache entry %s: %s", path, exc)
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+
     def evict_expired(self) -> int:
         """Remove all expired cache files.  Returns the number removed."""
         now = time.time()

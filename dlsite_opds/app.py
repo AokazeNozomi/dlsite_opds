@@ -12,7 +12,7 @@ from fastapi import FastAPI, Request
 
 from .core.auth import ClientPool, SourceImageLRU
 from .core.config import load_settings
-from .core.http_utils import background_tasks, PLAY_IMAGE_HEADERS
+from .core.http_utils import background_tasks
 from .services.image_cache import ImageCache
 from .core.progress import ProgressManager
 from .routes import covers, downloads, opds, pages, progress
@@ -33,9 +33,9 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         thread_name_prefix="img",
     )
     _app.state.prefetch_inflight: set[tuple[str, str, int, int | None]] = set()
+    _app.state.cover_semaphore = asyncio.Semaphore(cfg.cover_concurrency)
     _app.state.cover_session = aiohttp.ClientSession(
         timeout=aiohttp.ClientTimeout(total=30),
-        headers=PLAY_IMAGE_HEADERS,
     )
     _app.state.cover_cache: dict[str, tuple[bytes, str]] = {}
     yield
