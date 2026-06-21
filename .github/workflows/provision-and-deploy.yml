@@ -22,8 +22,19 @@ jobs:
       - run: pip install -e ".[test]"
       - run: pytest
 
-  build-and-push:
+  gate:
     needs: ci
+    if: github.ref_name == 'main' || github.ref_name == 'prod'
+    runs-on: ubuntu-latest
+    environment: ${{ github.ref_name == 'prod' && 'prod-gate' || 'dev-gate' }}
+    permissions:
+      contents: read
+    steps:
+      - name: Await reviewer approval
+        run: echo "Approved for ${{ github.ref_name }}."
+
+  build-and-push:
+    needs: gate
     if: github.ref_name == 'main' || github.ref_name == 'prod'
     runs-on: ubuntu-latest
     permissions:
@@ -56,19 +67,8 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  gate:
-    needs: build-and-push
-    if: github.ref_name == 'main' || github.ref_name == 'prod'
-    runs-on: ubuntu-latest
-    environment: ${{ github.ref_name == 'prod' && 'prod-gate' || 'dev-gate' }}
-    permissions:
-      contents: read
-    steps:
-      - name: Await reviewer approval
-        run: echo "Approved for ${{ github.ref_name }}."
-
   discover:
-    needs: gate
+    needs: build-and-push
     runs-on: ubuntu-latest
     permissions:
       contents: read

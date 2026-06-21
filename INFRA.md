@@ -213,7 +213,8 @@ Actions → **Provision and Deploy OPDS** → run (or push to `main`).
 2. Prod DNS A record → same IP
 3. Merge `prod` — deploy prod slot; Caddy picks up both domains
 
-Each `main`/`prod` deploy requires gate approval.
+Each `main`/`prod` run requires gate approval before the image is built and
+deployed.
 
 ```text
 https://opds-nightly.example.com:2581/opds    # nightly
