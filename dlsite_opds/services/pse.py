@@ -21,9 +21,26 @@ _thread_local = threading.local()
 
 MAX_CRYPT_ATTEMPTS = 3
 
+# DLsite Play scrambles crypt images in fixed 128px tiles. The served JPEG is
+# therefore padded up to whole tiles in each axis.
+TILE_SIZE = 128
+
 
 class CryptImageError(ValueError):
     """Crypt image validation or descramble failed."""
+
+
+def _looks_like_image(data: bytes) -> bool:
+    """Cheap magic-byte sniff to reject HTML error pages / auth redirects."""
+    if data[:3] == b"\xff\xd8\xff":  # JPEG
+        return True
+    if data[:8] == b"\x89PNG\r\n\x1a\n":  # PNG
+        return True
+    if data[:6] in (b"GIF87a", b"GIF89a"):  # GIF
+        return True
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":  # WebP
+        return True
+    return False
 
 
 def is_auth_failure(status: int) -> bool:
@@ -110,9 +127,17 @@ def validate_crypt_image(
     playfile: PlayFile,
     *,
     http_status: int = 200,
+    content_type: str | None = None,
     content_length: int | None = None,
 ) -> None:
-    """Validate a downloaded crypt image before descrambling."""
+    """Validate a downloaded crypt image before descrambling.
+
+    Rather than trusting raw dimensions, this checks the signals that
+    actually distinguish a bad download (auth redirect, CDN error page,
+    truncated transfer) from a good one, so the caller can retry / refresh
+    the token. Descramble correctness itself is unverifiable from the output
+    (it is a lossless tile permutation), so we validate download integrity.
+    """
     if not _is_crypt_playfile(playfile):
         return
 
@@ -121,21 +146,51 @@ def validate_crypt_image(
     width: int = optimized["width"]
     height: int = optimized["height"]
 
+    # 1. HTTP status: auth failures / server errors are retriable upstream.
     if not (200 <= http_status < 300):
         raise CryptImageError(
             f"Crypt image download failed with HTTP {http_status} for {opt_name}"
         )
 
-    im = Image.open(io.BytesIO(image_bytes))
+    # 2. Reject obvious non-image bodies (HTML error pages, auth redirects)
+    #    cheaply, before attempting to decode.
+    if content_type is not None and not content_type.lower().startswith("image/"):
+        raise CryptImageError(
+            f"Crypt image has non-image Content-Type {content_type!r} for {opt_name}"
+        )
+    if not _looks_like_image(image_bytes):
+        raise CryptImageError(
+            f"Crypt image body is not a recognised image for {opt_name} "
+            f"(head={image_bytes[:8]!r})"
+        )
+
+    # 3. Force a full decode to catch truncated / corrupt pixel data that a
+    #    lazy header read would miss (and that would otherwise blow up later
+    #    in descramble, where it can no longer be retried).
+    try:
+        im = Image.open(io.BytesIO(image_bytes))
+        im.load()
+    except Exception as exc:
+        raise CryptImageError(
+            f"Crypt image failed to decode for {opt_name}: {exc}"
+        ) from exc
+
     img_w, img_h = im.size
     if img_w == 0 or img_h == 0:
         raise CryptImageError(f"Crypt image has zero dimensions for {opt_name}")
-    if img_w != width or img_h != height:
+
+    # 4. The scrambled download is padded up to whole tiles, so its decoded
+    #    dimensions must equal the padded tile grid derived from metadata.
+    pad_w = math.ceil(width / TILE_SIZE) * TILE_SIZE
+    pad_h = math.ceil(height / TILE_SIZE) * TILE_SIZE
+    if (img_w, img_h) != (pad_w, pad_h):
         raise CryptImageError(
             f"Crypt image dimension mismatch for {opt_name}: "
-            f"got {img_w}x{img_h}, expected {width}x{height}"
+            f"got {img_w}x{img_h}, expected {pad_w}x{pad_h} "
+            f"(tile-padded {width}x{height})"
         )
 
+    # 5. Content-Length sanity: catches transfers the CDN truncated mid-stream.
     expected_len = optimized.get("length")
     if expected_len and content_length is not None and content_length < expected_len:
         raise CryptImageError(
@@ -150,14 +205,18 @@ def validate_crypt_image(
 
 def descramble_image(im: Image.Image, playfile: PlayFile) -> Image.Image:
     """Descramble a DLsite Play encrypted image in memory."""
-    tile_w = 128
+    tile_w = TILE_SIZE
     optimized = playfile.files["optimized"]
     width: int = optimized["width"]
     height: int = optimized["height"]
 
-    if im.size != (width, height):
+    # The scrambled download is padded up to whole tiles, so it is >= the
+    # final size. Tiles are derived from the metadata dimensions (which gives
+    # the same grid the server scrambled with) and the result is cropped back
+    # to width x height below.
+    if im.width < width or im.height < height:
         raise CryptImageError(
-            f"Image dimensions {im.width}x{im.height} do not match "
+            f"Image dimensions {im.width}x{im.height} smaller than "
             f"expected {width}x{height}"
         )
 
@@ -203,6 +262,7 @@ def prepare_source_image_with_validation(
     playfile: PlayFile,
     *,
     http_status: int = 200,
+    content_type: str | None = None,
     content_length: int | None = None,
 ) -> Image.Image:
     """Decode and descramble a crypt page after validating download integrity."""
@@ -210,6 +270,7 @@ def prepare_source_image_with_validation(
         image_bytes,
         playfile,
         http_status=http_status,
+        content_type=content_type,
         content_length=content_length,
     )
     return prepare_source_image(image_bytes, playfile)

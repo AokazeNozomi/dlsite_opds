@@ -384,7 +384,7 @@ class DlsiteClient:
         use_image_headers = True
 
         for attempt in range(MAX_CRYPT_ATTEMPTS):
-            body, _ctype, status, content_length = await self._download_playfile(
+            body, ctype, status, content_length = await self._download_playfile(
                 token,
                 playfile,
                 use_image_headers=use_image_headers,
@@ -394,6 +394,7 @@ class DlsiteClient:
                     body,
                     playfile,
                     http_status=status,
+                    content_type=ctype,
                     content_length=content_length,
                 )
                 logger.debug(
