@@ -2,11 +2,10 @@
 
 import asyncio
 import logging
-import re
 import tempfile
 import time
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TypeAlias, TypeVar
 
@@ -17,6 +16,16 @@ from dlsite_async.play.epub import EpubReflowableSession
 from dlsite_async.play.models import DownloadToken, PlayFile, ZipTree
 from dlsite_async.work import WorkType
 
+from ..services.chapters import ChapterGroup, expand_pdf_pages, extract_chapter_groups, natural_sort_key
+from ..services.pse import (
+    CryptImageError,
+    MAX_CRYPT_ATTEMPTS,
+    is_auth_failure,
+    prepare_source_image_with_validation,
+    should_retry,
+)
+from .http_utils import PLAY_IMAGE_HEADERS
+
 logger = logging.getLogger(__name__)
 
 _T = TypeVar("_T")
@@ -25,7 +34,7 @@ PurchaseList: TypeAlias = list[tuple[Work, datetime | None]]
 
 
 def _natural_sort_key(s: str) -> list[int | str]:
-    return [int(t) if t.isdigit() else t.lower() for t in re.split(r"(\d+)", s)]
+    return natural_sort_key(s)
 
 
 @dataclass
@@ -38,6 +47,16 @@ class WorkPageData:
     ziptree: ZipTree | None = None
     token: DownloadToken | None = None
     token_fetched: float = 0.0
+    chapters: list[ChapterGroup] = field(default_factory=list)
+
+    def pages_for_chapter(self, chapter_key: str | None) -> list[tuple[str, PlayFile]]:
+        """Return pages for *chapter_key*, or the flat list when unset."""
+        if chapter_key is None:
+            return self.pages
+        for chapter in self.chapters:
+            if chapter.key == chapter_key:
+                return chapter.pages
+        raise KeyError(chapter_key)
 
 
 class DlsiteClient:
@@ -190,7 +209,16 @@ class DlsiteClient:
                     cached.token_fetched = time.time()
                     return cached
                 tree = await self.api.ziptree(token)
-                pages = _extract_pages(tree, work_type=self._work_type_for(product_id))
+                chapters = extract_chapter_groups(tree)
+                if chapters:
+                    pages: list[tuple[str, PlayFile]] = []
+                    for chapter in chapters:
+                        pages.extend(chapter.pages)
+                else:
+                    chapters = []
+                    pages = _extract_pages(
+                        tree, work_type=self._work_type_for(product_id)
+                    )
                 all_files = _extract_all_files(tree)
                 return WorkPageData(
                     page_count=len(pages),
@@ -199,15 +227,25 @@ class DlsiteClient:
                     ziptree=tree,
                     token=token,
                     token_fetched=time.time(),
+                    chapters=chapters,
                 )
 
             data = await self._with_reauth(_fetch)
             self._work_cache[product_id] = data
             return data
 
-    def get_cached_page_count(self, product_id: str) -> int | None:
+    def get_cached_page_count(
+        self, product_id: str, chapter_key: str | None = None
+    ) -> int | None:
         cached = self._work_cache.get(product_id)
-        return cached.page_count if cached else None
+        if cached is None:
+            return None
+        if chapter_key is not None:
+            try:
+                return len(cached.pages_for_chapter(chapter_key))
+            except KeyError:
+                return None
+        return cached.page_count
 
     def get_cached_work_page_data(self, product_id: str) -> WorkPageData | None:
         """Return cached ziptree-derived data without contacting the API."""
@@ -229,12 +267,35 @@ class DlsiteClient:
             return await self.get_work_page_data(product_id)
         return data
 
+    async def refresh_download_token(self, product_id: str) -> WorkPageData:
+        """Force-fetch a new download token for *product_id*."""
+        async with self._work_lock(product_id):
+            token = await self.api.download_token(product_id)
+            cached = self._work_cache.get(product_id)
+            if cached is not None:
+                cached.token = token
+                cached.token_fetched = time.time()
+                return cached
+        return await self.get_work_page_data(product_id)
+
     # -- file download -------------------------------------------------------
 
+    @staticmethod
+    def _is_image_playfile(playfile: PlayFile) -> bool:
+        return playfile.type in ("image", "pdf") or bool(
+            playfile.files.get("optimized")
+        )
+
     async def _download_playfile(
-        self, token: DownloadToken, playfile: PlayFile
-    ) -> tuple[bytes, str]:
+        self,
+        token: DownloadToken,
+        playfile: PlayFile,
+        *,
+        use_image_headers: bool = False,
+    ) -> tuple[bytes, str, int, int | None]:
         """Download a single file via its optimized URL.
+
+        Returns ``(body, content_type, http_status, content_length)``.
 
         Falls back to ``optimized/{hashname}`` when no optimized version
         metadata is available (common for PDFs and other document files).
@@ -253,37 +314,106 @@ class DlsiteClient:
                 playfile.files,
             )
         url = f"{token.url}optimized/{name}"
-        async with self.api.get(url, timeout=self.api._DL_TIMEOUT) as resp:
+        headers = PLAY_IMAGE_HEADERS if use_image_headers else None
+        async with self.api.get(
+            url, timeout=self.api._DL_TIMEOUT, headers=headers
+        ) as resp:
+            content_length = _parse_content_length(resp.headers.get("Content-Length"))
             if resp.status == 404:
                 resp.release()
             else:
                 body = await resp.read()
                 content_type = resp.content_type or "application/octet-stream"
-                return body, content_type
+                return body, content_type, resp.status, content_length
 
         bare_url = f"{token.url}{playfile.hashname}"
         logger.info(
             "optimized/ path returned 404, trying bare URL for %s",
             playfile.hashname,
         )
-        async with self.api.get(bare_url, timeout=self.api._DL_TIMEOUT) as resp:
+        async with self.api.get(
+            bare_url, timeout=self.api._DL_TIMEOUT, headers=headers
+        ) as resp:
             resp.raise_for_status()
             body = await resp.read()
             content_type = resp.content_type or "application/octet-stream"
-        return body, content_type
+            content_length = _parse_content_length(resp.headers.get("Content-Length"))
+        return body, content_type, resp.status, content_length
+
+    async def _download_crypt_page_image(
+        self,
+        product_id: str,
+        token: DownloadToken,
+        playfile: PlayFile,
+    ) -> tuple[bytes, PlayFile]:
+        """Download a crypt page with validation and up to 3 retry attempts."""
+        last_err: Exception = CryptImageError("Crypt image download failed")
+        use_image_headers = True
+
+        for attempt in range(MAX_CRYPT_ATTEMPTS):
+            body, _ctype, status, content_length = await self._download_playfile(
+                token,
+                playfile,
+                use_image_headers=use_image_headers,
+            )
+            try:
+                prepare_source_image_with_validation(
+                    body,
+                    playfile,
+                    http_status=status,
+                    content_length=content_length,
+                )
+                return body, playfile
+            except CryptImageError as exc:
+                logger.debug(
+                    "Crypt image attempt %d failed for %s HTTP %d: %s",
+                    attempt + 1,
+                    playfile.optimized_name,
+                    status,
+                    exc,
+                )
+                last_err = exc
+                if not should_retry(attempt, MAX_CRYPT_ATTEMPTS):
+                    break
+                if is_auth_failure(status):
+                    data = await self.refresh_download_token(product_id)
+                    token = data.token  # type: ignore[assignment]
+                elif attempt == 0:
+                    continue
+                else:
+                    data = await self.refresh_download_token(product_id)
+                    token = data.token  # type: ignore[assignment]
+
+        raise last_err
 
     async def download_page_image(
-        self, product_id: str, page_index: int
+        self,
+        product_id: str,
+        page_index: int,
+        chapter_key: str | None = None,
     ) -> tuple[bytes, PlayFile]:
         async def _fetch() -> tuple[bytes, PlayFile]:
             data = await self.ensure_valid_token(product_id)
-            if page_index < 0 or page_index >= len(data.pages):
+            pages = data.pages_for_chapter(chapter_key)
+            if page_index < 0 or page_index >= len(pages):
                 raise IndexError(
-                    f"Page {page_index} out of range (0..{len(data.pages) - 1})"
+                    f"Page {page_index} out of range (0..{len(pages) - 1})"
                 )
-            _path, playfile = data.pages[page_index]
-            image_bytes, _ = await self._download_playfile(data.token, playfile)  # type: ignore[arg-type]
-            return image_bytes, playfile
+            _path, playfile = pages[page_index]
+            is_crypt = bool(playfile.files.get("optimized", {}).get("crypt", False))
+            use_image_headers = self._is_image_playfile(playfile)
+
+            if is_crypt:
+                return await self._download_crypt_page_image(
+                    product_id, data.token, playfile  # type: ignore[arg-type]
+                )
+
+            body, _ctype, _status, _clen = await self._download_playfile(
+                data.token,  # type: ignore[arg-type]
+                playfile,
+                use_image_headers=use_image_headers,
+            )
+            return body, playfile
 
         return await self._with_reauth(_fetch)
 
@@ -303,7 +433,12 @@ class DlsiteClient:
             )
             if playfile is None:
                 raise KeyError(file_hash)
-            return await self._download_playfile(data.token, playfile)  # type: ignore[arg-type]
+            body, content_type, _status, _clen = await self._download_playfile(
+                data.token,  # type: ignore[arg-type]
+                playfile,
+                use_image_headers=self._is_image_playfile(playfile),
+            )
+            return body, content_type
 
         return await self._with_reauth(_fetch)
 
@@ -340,6 +475,15 @@ class DlsiteClient:
 # -- helpers -----------------------------------------------------------------
 
 
+def _parse_content_length(value: str | None) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        return None
+
+
 def _find_epub_reflowable(data: WorkPageData) -> PlayFile | None:
     """Return the first ``epub_reflowable`` PlayFile in *data*, if any."""
     for _path, pf in data.all_files:
@@ -360,29 +504,7 @@ _IMAGE_WORK_TYPES: frozenset[WorkType] = frozenset({
 
 
 def _expand_pdf_pages(path: str, playfile: PlayFile) -> list[tuple[str, PlayFile]]:
-    """Expand a PDF PlayFile into individual page PlayFiles.
-
-    DLsite represents PDF works as a single PlayFile whose ``files``
-    dict contains a ``page`` list.  Each entry has an ``optimized``
-    sub-dict identical to the one used by image PlayFiles.
-    """
-    page_list = playfile.files.get("page")
-    if not isinstance(page_list, list):
-        return []
-    result: list[tuple[str, PlayFile]] = []
-    for idx, page_data in enumerate(page_list):
-        opt = page_data.get("optimized")
-        if not opt or "name" not in opt:
-            continue
-        synthetic = PlayFile(
-            length=opt.get("length", 0),
-            type="image",
-            files={"optimized": opt},
-            hashname=opt["name"],
-        )
-        page_path = f"{path}#{idx:04d}"
-        result.append((page_path, synthetic))
-    return result
+    return expand_pdf_pages(path, playfile)
 
 
 def _extract_pages(

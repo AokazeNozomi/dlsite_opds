@@ -2,6 +2,7 @@
 
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
+from unittest.mock import MagicMock
 
 import pytest
 from dlsite_async.work import AgeCategory, Work, WorkType
@@ -13,9 +14,11 @@ from dlsite_opds.services.feeds import (
     NAVIGATION_TYPE,
     OPENSEARCH_NS,
     PSE_NS,
+    build_chapter_feed,
     build_navigation_feed,
     build_purchases_feed,
 )
+from dlsite_opds.services.chapters import ChapterGroup
 from dlsite_opds.services.libraries import (
     LIBRARIES,
     Library,
@@ -539,6 +542,60 @@ class TestPurchasesFeed:
         href = next_links[0].get("href") or ""
         assert "/opds/library/manga" in href
         assert "page=2" in href
+
+
+class TestMultiChapterFeeds:
+    def test_multi_chapter_work_gets_subsection_not_pse(self) -> None:
+        w = _make_work(work_type=WorkType.MANGA)
+        xml = build_purchases_feed(
+            works=[(w, datetime(2024, 6, 1, tzinfo=timezone.utc))],
+            page=1,
+            page_size=30,
+            total=1,
+            base_url=BASE,
+            page_counts={"BJ370220": 42},
+            progress={},
+            chapter_counts={"BJ370220": 3},
+        )
+        root = ET.fromstring(xml)
+        entry = root.find(f"{ATOM}entry")
+        assert entry is not None
+        links = entry.findall(f"{ATOM}link")
+        subsection = [l for l in links if l.get("rel") == "subsection"]
+        pse = [
+            l for l in links
+            if "vaemendis.net/opds-pse/stream" in (l.get("rel") or "")
+        ]
+        assert len(subsection) == 1
+        assert "/opds/work/BJ370220" in (subsection[0].get("href") or "")
+        assert len(pse) == 0
+
+    def test_chapter_feed_lists_chapters_with_pse_links(self) -> None:
+        w = _make_work()
+        chapters = [
+            ChapterGroup(
+                key="img:chapter1",
+                title="chapter1",
+                pages=[("chapter1/001.jpg", MagicMock())] * 5,
+            ),
+            ChapterGroup(
+                key="img:chapter2",
+                title="chapter2",
+                pages=[("chapter2/001.jpg", MagicMock())] * 8,
+            ),
+        ]
+        xml = build_chapter_feed(w, chapters, BASE, progress={})
+        root = ET.fromstring(xml)
+        entries = root.findall(f"{ATOM}entry")
+        assert len(entries) == 2
+        assert entries[0].findtext(f"{ATOM}title") == "chapter1 (5 pages)"
+        link = [
+            l for l in entries[0].findall(f"{ATOM}link")
+            if "vaemendis.net/opds-pse/stream" in (l.get("rel") or "")
+        ][0]
+        href = link.get("href") or ""
+        assert "chapter=img%3Achapter1" in href or "chapter=img:chapter1" in href
+        assert link.get(f"{PSE}count") == "5"
 
 
 class TestLibraries:

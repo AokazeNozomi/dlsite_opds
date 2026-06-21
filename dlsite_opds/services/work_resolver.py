@@ -38,6 +38,7 @@ class ResolvedWorkInfo:
 
     page_counts: dict[str, int]
     file_links: dict[str, str]
+    chapter_counts: dict[str, int]
 
     def has_content(self, pid: str) -> bool:
         return pid in self.page_counts or pid in self.file_links
@@ -58,9 +59,12 @@ async def resolve_work_metadata(
     """
     page_counts: dict[str, int] = {}
     file_links: dict[str, str] = {}
+    chapter_counts: dict[str, int] = {}
     missing: list[str] = []
 
     def _classify(pid: str, data: WorkPageData) -> None:
+        if len(data.chapters) > 1:
+            chapter_counts[pid] = len(data.chapters)
         if _find_epub_reflowable(data) is not None:
             file_links[pid] = "application/epub+zip"
         elif data.page_count > 0:
@@ -85,7 +89,11 @@ async def resolve_work_metadata(
             missing.append(pid)
 
     if not missing:
-        return ResolvedWorkInfo(page_counts=page_counts, file_links=file_links)
+        return ResolvedWorkInfo(
+            page_counts=page_counts,
+            file_links=file_links,
+            chapter_counts=chapter_counts,
+        )
 
     sem = asyncio.Semaphore(4)
 
@@ -103,4 +111,8 @@ async def resolve_work_metadata(
             continue
         _classify(pid, data)
 
-    return ResolvedWorkInfo(page_counts=page_counts, file_links=file_links)
+    return ResolvedWorkInfo(
+        page_counts=page_counts,
+        file_links=file_links,
+        chapter_counts=chapter_counts,
+    )

@@ -23,6 +23,14 @@ class TestImageCache:
         assert cache.get("RJ001", 0, None) == b"full"
         assert cache.get("RJ001", 0, 800) == b"w800"
 
+    def test_chapter_scoped_entries_are_separate(self, tmp_path) -> None:
+        cache = ImageCache(tmp_path / "cache", ttl=3600)
+        cache.put("RJ001", 0, 800, b"ch1", chapter="img:ch1")
+        cache.put("RJ001", 0, 800, b"ch2", chapter="img:ch2")
+        assert cache.get("RJ001", 0, 800, chapter="img:ch1") == b"ch1"
+        assert cache.get("RJ001", 0, 800, chapter="img:ch2") == b"ch2"
+        assert cache.get("RJ001", 0, 800) is None
+
     def test_expired_entry_returns_none(self, tmp_path) -> None:
         cache = ImageCache(tmp_path / "cache", ttl=1)
         cache.put("RJ001", 0, None, b"data")

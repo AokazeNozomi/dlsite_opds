@@ -4,11 +4,14 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
+from urllib.parse import quote
 from xml.sax.saxutils import escape
 
 from dlsite_async import Work
 
 from ..core.play_client import PurchaseList
+from ..core.progress import progress_storage_key
+from ..services.chapters import ChapterGroup
 
 if TYPE_CHECKING:
     from .libraries import Library
@@ -192,10 +195,16 @@ def _entry_pse_link(
     base_url: str,
     page_count: int | None,
     prog: dict[str, str | int] | None,
+    chapter: str | None = None,
 ) -> str:
     if page_count is None or page_count <= 0:
         return ""
-    pse_href = f"{base_url}/pse/{pid}?page={{pageNumber}}&width={{maxWidth}}"
+    chapter_q = ""
+    if chapter:
+        chapter_q = f"chapter={quote(chapter, safe='')}&"
+    pse_href = (
+        f"{base_url}/pse/{pid}?{chapter_q}page={{pageNumber}}&width={{maxWidth}}"
+    )
     xml = (
         f'    <link rel="http://vaemendis.net/opds-pse/stream"'
         f' type="image/jpeg"'
@@ -207,6 +216,14 @@ def _entry_pse_link(
         xml += f' pse:lastReadDate="{_a(str(prog["last_read_date"]))}"'
     xml += "/>\n"
     return xml
+
+
+def _entry_chapter_subsection_link(pid: str, base_url: str) -> str:
+    href = f"{base_url}/opds/work/{pid}"
+    return (
+        f'    <link rel="subsection" href="{_a(href)}"'
+        f' type="{NAVIGATION_TYPE}"/>\n'
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -234,10 +251,17 @@ def _work_entry(
     page_counts: dict[str, int],
     progress: dict[str, dict[str, str | int]],
     file_links: dict[str, str] | None = None,
+    chapter_counts: dict[str, int] | None = None,
 ) -> str:
     pid = work.product_id
     updated = _dt(purchase_date or work.regist_date)
     pc = page_counts.get(pid)
+    multi_chapter = bool(chapter_counts and chapter_counts.get(pid, 0) > 1)
+    pse_link = ""
+    if multi_chapter:
+        pse_link = _entry_chapter_subsection_link(pid, base_url)
+    elif pc:
+        pse_link = _entry_pse_link(pid, base_url, pc, progress.get(pid))
     return "".join([
         "  <entry>\n",
         _entry_metadata(pid, work.work_name, updated),
@@ -248,7 +272,7 @@ def _work_entry(
         _acquisition_link(pid, base_url, page_counts,
                           file_links or {}),
         _entry_alternate_link(work),
-        _entry_pse_link(pid, base_url, pc, progress.get(pid)),
+        pse_link,
         "  </entry>\n",
     ])
 
@@ -310,6 +334,7 @@ def build_purchases_feed(
     title: str = "Purchases",
     feed_path: str = "/opds/purchases",
     file_links: dict[str, str] | None = None,
+    chapter_counts: dict[str, int] | None = None,
 ) -> str:
     """Paginated acquisition feed.
 
@@ -341,7 +366,46 @@ def build_purchases_feed(
 
     for work, purchase_date in works:
         xml += _work_entry(work, purchase_date, base_url, page_counts, progress,
-                           file_links)
+                           file_links, chapter_counts)
+
+    xml += _FEED_CLOSE
+    return xml
+
+
+def build_chapter_feed(
+    work: Work,
+    chapters: list[ChapterGroup],
+    base_url: str,
+    progress: dict[str, dict[str, str | int]],
+) -> str:
+    """Navigation feed listing chapters for a multi-chapter work."""
+    pid = work.product_id
+    self_href = f"{base_url}/opds/work/{pid}"
+    xml = _feed_header(
+        feed_id=self_href,
+        title=work.work_name,
+        self_href=self_href,
+        start_href=f"{base_url}/opds",
+        self_type=NAVIGATION_TYPE,
+    )
+
+    for chapter in chapters:
+        page_count = len(chapter.pages)
+        prog_key = progress_storage_key(pid, chapter.key)
+        prog = progress.get(prog_key)
+        title = f"{chapter.title} ({page_count} pages)"
+        xml += (
+            "  <entry>\n"
+            f"    <id>urn:dlsite:{_e(pid)}:{_e(chapter.key)}</id>\n"
+            f"    <title>{_e(title)}</title>\n"
+            f"    <updated>{_now()}</updated>\n"
+            f"    <dc:identifier>{_e(pid)}</dc:identifier>\n"
+        )
+        xml += _entry_cover_links(work, base_url)
+        xml += _entry_pse_link(
+            pid, base_url, page_count, prog, chapter=chapter.key
+        )
+        xml += "  </entry>\n"
 
     xml += _FEED_CLOSE
     return xml

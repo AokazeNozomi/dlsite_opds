@@ -123,11 +123,15 @@ https://<your-domain>:2581/opds    # nightly
 | Route | Description |
 |---|---|
 | `GET /opds` | Root navigation feed |
+| `GET /opds/work/{product_id}` | Chapter navigation feed (multi-chapter works) |
 | `GET /opds/purchases?page=1` | Paginated purchases catalog |
 | `GET /pse/{product_id}?page=0&width=800` | PSE page image (0-based index) |
+| `GET /pse/{product_id}?chapter=img:folder&page=0` | PSE page within a chapter |
 | `GET /files/{product_id}/{file_hash}` | Raw file proxy (fallback) |
 | `PUT /progress/{product_id}` | Update reading progress (`{"last_read": 10}`, 1-based) |
+| `PUT /progress/{product_id}?chapter=img:folder` | Update chapter-scoped progress |
 | `GET /progress/{product_id}` | Get reading progress |
+| `GET /progress/{product_id}?chapter=img:folder` | Get chapter-scoped progress |
 | `GET /healthz` | Health check |
 
 ## OPDS-PSE
@@ -140,6 +144,9 @@ progression attributes.
 - `{maxWidth}` is optional; pages wider than the value are scaled down
 - All pages are served as `image/jpeg` (other formats converted server-side)
 - Scrambled images are descrambled automatically
+- Crypt pages are validated (dimensions, Content-Length) and re-fetched up to 3 times with token refresh on CDN auth failures
+- Single-chapter works expose a direct PSE stream link; multi-chapter works link to `/opds/work/{product_id}` for chapter selection
+- The optional `chapter` query param on `/pse/` is required when a work has more than one chapter
 
 ### Client compatibility
 

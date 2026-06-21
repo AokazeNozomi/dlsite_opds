@@ -7,7 +7,7 @@ from fastapi.responses import PlainTextResponse, RedirectResponse, Response
 
 from ..core.auth import AuthContext, get_auth
 from ..core.config import Settings
-from ..services.feeds import ATOM_XML_TYPE, build_navigation_feed, build_purchases_feed
+from ..services.feeds import ATOM_XML_TYPE, build_chapter_feed, build_navigation_feed, build_purchases_feed
 from ..services.libraries import LIBRARIES, filter_purchases, get_library, prepare_opds_purchases
 from ..core.play_client import PurchaseList
 from ..services.work_resolver import resolve_work_metadata
@@ -63,6 +63,7 @@ async def _build_feed_page(
         title=title,
         feed_path=feed_path,
         file_links=info.file_links,
+        chapter_counts=info.chapter_counts,
     )
     return Response(content=xml, media_type=ATOM_XML_TYPE)
 
@@ -130,3 +131,36 @@ async def opds_library(
         title=library.title,
         feed_path=f"/opds/library/{slug}",
     )
+
+
+@router.get("/opds/work/{product_id}", response_class=Response)
+async def opds_work_chapters(
+    request: Request,
+    product_id: str,
+    auth: AuthContext = Depends(get_auth),
+) -> Response:
+    """Navigation feed listing chapters for a multi-chapter work."""
+    try:
+        data = await auth.client.get_work_page_data(product_id)
+    except Exception:
+        raise HTTPException(status_code=502, detail="Failed to fetch work data")
+
+    if len(data.chapters) <= 1:
+        raise HTTPException(
+            status_code=404,
+            detail="Work has no chapter navigation (single chapter or no pages)",
+        )
+
+    purchases = await auth.client.get_purchases()
+    work = next((w for w, _ in purchases if w.product_id == product_id), None)
+    if work is None:
+        raise HTTPException(status_code=404, detail="Work not found in library")
+
+    base = _base_url(request)
+    xml = build_chapter_feed(
+        work,
+        data.chapters,
+        base,
+        auth.progress.get_all(),
+    )
+    return Response(content=xml, media_type=ATOM_XML_TYPE)

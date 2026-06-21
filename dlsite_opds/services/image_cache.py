@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 
 class ImageCache:
-    """Cache processed JPEG images on disk, keyed by (product_id, page, width).
+    """Cache processed JPEG images on disk, keyed by (product_id, chapter, page, width).
 
     Files are stored as flat ``<sha256>.jpg`` entries.  Freshness is
     determined by comparing each file's mtime against the configured TTL.
@@ -23,13 +23,25 @@ class ImageCache:
         self._ttl = ttl
         self._dir.mkdir(parents=True, exist_ok=True)
 
-    def _key_path(self, product_id: str, page: int, width: int | None) -> Path:
-        raw = f"{product_id}:{page}:{width or 'full'}"
+    def _key_path(
+        self,
+        product_id: str,
+        page: int,
+        width: int | None,
+        chapter: str | None = None,
+    ) -> Path:
+        raw = f"{product_id}:{chapter or ''}:{page}:{width or 'full'}"
         digest = hashlib.sha256(raw.encode()).hexdigest()
         return self._dir / f"{digest}.jpg"
 
-    def get(self, product_id: str, page: int, width: int | None) -> bytes | None:
-        path = self._key_path(product_id, page, width)
+    def get(
+        self,
+        product_id: str,
+        page: int,
+        width: int | None,
+        chapter: str | None = None,
+    ) -> bytes | None:
+        path = self._key_path(product_id, page, width, chapter)
         try:
             stat = path.stat()
         except FileNotFoundError:
@@ -45,9 +57,14 @@ class ImageCache:
             return None
 
     def put(
-        self, product_id: str, page: int, width: int | None, data: bytes
+        self,
+        product_id: str,
+        page: int,
+        width: int | None,
+        data: bytes,
+        chapter: str | None = None,
     ) -> None:
-        path = self._key_path(product_id, page, width)
+        path = self._key_path(product_id, page, width, chapter)
         try:
             fd, tmp = tempfile.mkstemp(dir=self._dir, suffix=".tmp")
             try:

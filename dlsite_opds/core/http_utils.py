@@ -14,6 +14,18 @@ _MIME_TO_EXT: dict[str, str] = {
     "application/zip": ".zip",
 }
 
+# Browser-like headers for DLsite Play CDN image fetches.
+PLAY_IMAGE_USER_AGENT = (
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) "
+    "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 "
+    "Mobile/15E148 Safari/604.1"
+)
+PLAY_IMAGE_HEADERS = {
+    "User-Agent": PLAY_IMAGE_USER_AGENT,
+    "Referer": "https://play.dlsite.com/",
+    "Accept": "image/webp,image/apng,image/*,*/*;q=0.8",
+}
+
 background_tasks: set[asyncio.Task[None]] = set()
 
 

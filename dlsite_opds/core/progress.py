@@ -8,6 +8,13 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 
+def progress_storage_key(product_id: str, chapter: str | None = None) -> str:
+    """Build the storage key for a work or chapter-scoped progress entry."""
+    if chapter:
+        return f"{product_id}#{chapter}"
+    return product_id
+
+
 class ProgressStore:
     """JSON-file backed per-work reading progress.
 
@@ -15,6 +22,8 @@ class ProgressStore:
     OPDS-PSE v1.2 ``pse:lastRead`` semantics (page numbering starts at 1
     for progression, even though ``{pageNumber}`` in the stream href is
     0-based).
+
+    When *chapter* is set, progress is stored under ``"{product_id}#{chapter}"``.
     """
 
     def __init__(self, path: Path) -> None:
@@ -35,8 +44,10 @@ class ProgressStore:
         tmp.write_text(json.dumps(self._data, indent=2, ensure_ascii=False), "utf-8")
         tmp.replace(self._path)
 
-    def get(self, product_id: str) -> dict[str, str | int] | None:
-        return self._data.get(product_id)
+    def get(
+        self, product_id: str, chapter: str | None = None
+    ) -> dict[str, str | int] | None:
+        return self._data.get(progress_storage_key(product_id, chapter))
 
     def get_all(self) -> dict[str, dict[str, str | int]]:
         return dict(self._data)
@@ -46,10 +57,11 @@ class ProgressStore:
         product_id: str,
         last_read: int,
         last_read_date: datetime | None = None,
+        chapter: str | None = None,
     ) -> None:
         if last_read_date is None:
             last_read_date = datetime.now(timezone.utc)
-        self._data[product_id] = {
+        self._data[progress_storage_key(product_id, chapter)] = {
             "last_read": last_read,
             "last_read_date": last_read_date.strftime("%Y-%m-%dT%H:%M:%SZ"),
         }

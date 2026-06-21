@@ -80,7 +80,7 @@ class TestPrefetchPages:
     async def test_prefetch_skips_inflight_pages(
         self, app_state, mock_client
     ) -> None:
-        app_state.prefetch_inflight.add(("RJ123456", 2, 800))
+        app_state.prefetch_inflight.add(("RJ123456", "", 2, 800))
 
         await prefetch_pages(
             app_state, mock_client,

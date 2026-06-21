@@ -45,3 +45,11 @@ class TestProgressStore:
         prog = store.get("RJ111111")
         assert prog is not None
         assert prog["last_read_date"] == "2024-03-15T12:00:00Z"
+
+    def test_chapter_scoped_progress(self, tmp_path: Path) -> None:
+        store = ProgressStore(tmp_path / "p.json")
+        store.set("RJ123456", 3, chapter="img:chapter1")
+        store.set("RJ123456", 7, chapter="img:chapter2")
+        assert store.get("RJ123456") is None
+        assert store.get("RJ123456", chapter="img:chapter1")["last_read"] == 3
+        assert store.get("RJ123456", chapter="img:chapter2")["last_read"] == 7
