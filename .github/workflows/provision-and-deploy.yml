@@ -342,4 +342,8 @@ jobs:
             sleep 10
           done
           echo "Timed out waiting for OPDS on port ${OPDS_EXTERNAL_PORT}" >&2
+          ssh -i ~/.ssh/opds_deploy_key deploy@"${OPDS_HOST}" \
+            "echo '--- Caddyfile ---' && cat '${CADDY_PATH}/Caddyfile' && \
+             echo '--- docker compose ps ---' && docker compose -f '${CADDY_PATH}/docker-compose.caddy.yml' ps && \
+             echo '--- published ports ---' && docker port dlsite-opds-caddy || true"
           exit 1

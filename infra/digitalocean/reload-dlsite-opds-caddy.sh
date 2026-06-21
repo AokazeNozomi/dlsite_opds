@@ -42,4 +42,5 @@ fi
 mv -f "$tmp" "$CADDYFILE"
 
 cd "$CADDY_DIR"
-docker compose -f docker-compose.caddy.yml up -d
+# Recreate so updated port mappings and Caddyfile bind addresses take effect.
+docker compose -f docker-compose.caddy.yml up -d --force-recreate --remove-orphans
