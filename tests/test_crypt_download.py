@@ -25,8 +25,8 @@ async def test_crypt_download_retries_after_403_then_succeeds() -> None:
     client = DlsiteClient()
     client._api = MagicMock()
 
-    pf = FakePlayFile(crypt=True, width=800, height=600)
-    good_bytes = make_jpeg(800, 600)
+    pf = FakePlayFile(crypt=True, width=768, height=640)
+    good_bytes = make_jpeg(768, 640)
     token = MagicMock()
     token.url = "https://cdn.example/"
 
