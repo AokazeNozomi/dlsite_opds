@@ -7,9 +7,19 @@ from fastapi.responses import PlainTextResponse, RedirectResponse, Response
 
 from ..core.auth import AuthContext, get_auth
 from ..core.config import Settings
-from ..services.feeds import ATOM_XML_TYPE, build_chapter_feed, build_navigation_feed, build_purchases_feed
-from ..services.libraries import LIBRARIES, filter_purchases, get_library, prepare_opds_purchases
 from ..core.play_client import PurchaseList
+from ..services.feeds import (
+    ATOM_XML_TYPE,
+    build_chapter_feed,
+    build_navigation_feed,
+    build_purchases_feed,
+)
+from ..services.libraries import (
+    LIBRARIES,
+    filter_purchases,
+    get_library,
+    prepare_opds_purchases,
+)
 from ..services.work_resolver import resolve_work_metadata
 
 router = APIRouter()

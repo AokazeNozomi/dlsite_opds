@@ -1,5 +1,6 @@
 """FastAPI application — OPDS + OPDS-PSE routes."""
 
+import asyncio
 import logging
 import os
 import time
@@ -13,9 +14,9 @@ from fastapi import FastAPI, Request
 from .core.auth import ClientPool, SourceImageLRU
 from .core.config import load_settings
 from .core.http_utils import background_tasks
-from .services.image_cache import ImageCache
 from .core.progress import ProgressManager
 from .routes import covers, downloads, opds, pages, progress
+from .services.image_cache import ImageCache
 
 logger = logging.getLogger(__name__)
 

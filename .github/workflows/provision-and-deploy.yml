@@ -20,6 +20,7 @@ jobs:
           python-version: "3.13"
           cache: pip
       - run: pip install -e ".[test]"
+      - run: ruff check .
       - run: pytest
 
   gate:
@@ -58,6 +59,37 @@ jobs:
           tags: type=ref,event=branch
 
       - uses: docker/build-push-action@v7
+        id: build
+        with:
+          context: .
+          push: false
+          load: true
+          platforms: linux/amd64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke-run image
+        run: |
+          set -euo pipefail
+          IMAGE=$(echo "${{ steps.meta.outputs.tags }}" | head -n1)
+          docker run -d --name opds-smoke -e DLSITE_OPDS_DATA_DIR=/tmp/data \
+            -p 2580:2580 "$IMAGE"
+          for i in {1..20}; do
+            if curl -fsS http://localhost:2580/healthz | grep -qx ok; then
+              echo "healthy"
+              docker rm -f opds-smoke
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "container did not become healthy" >&2
+          docker logs opds-smoke || true
+          docker rm -f opds-smoke
+          exit 1
+
+      - uses: docker/build-push-action@v7
         with:
           context: .
           push: true
@@ -65,7 +97,6 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
-          cache-to: type=gha,mode=max
 
   discover:
     needs: build-and-push
@@ -345,7 +376,9 @@ jobs:
           done
           echo "Timed out waiting for OPDS on port ${OPDS_EXTERNAL_PORT}" >&2
           ssh -i ~/.ssh/opds_deploy_key deploy@"${OPDS_HOST}" \
-            "echo '--- Caddyfile ---' && cat '${CADDY_PATH}/Caddyfile' && \
-             echo '--- docker compose ps ---' && docker compose -f '${CADDY_PATH}/docker-compose.caddy.yml' ps && \
+            "echo '--- app container ---' && docker ps -a --filter name='${CONTAINER_NAME}' && \
+             echo '--- app logs ---' && docker logs --tail 200 '${CONTAINER_NAME}' 2>&1 || true && \
+             echo '--- Caddyfile ---' && cat '${CADDY_PATH}/Caddyfile' && \
+             echo '--- caddy ps ---' && docker compose -f '${CADDY_PATH}/docker-compose.caddy.yml' ps && \
              echo '--- published ports ---' && docker port dlsite-opds-caddy || true"
           exit 1

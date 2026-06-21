@@ -16,7 +16,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-test = ["httpx", "pytest", "pytest-asyncio"]
+test = ["httpx", "pytest", "pytest-asyncio", "ruff"]
 
 [project.scripts]
 dlsite-opds = "dlsite_opds.__main__:main"
@@ -26,3 +26,10 @@ asyncio_mode = "auto"
 markers = ["e2e: end-to-end tests requiring real DLsite Play credentials"]
 log_cli = true
 log_cli_level = "INFO"
+
+[tool.ruff]
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+ignore = ["E402", "E501", "E741"]

@@ -16,10 +16,15 @@ from dlsite_async.play.epub import EpubReflowableSession
 from dlsite_async.play.models import DownloadToken, PlayFile, ZipTree
 from dlsite_async.work import WorkType
 
-from ..services.chapters import ChapterGroup, expand_pdf_pages, extract_chapter_groups, natural_sort_key
+from ..services.chapters import (
+    ChapterGroup,
+    expand_pdf_pages,
+    extract_chapter_groups,
+    natural_sort_key,
+)
 from ..services.pse import (
-    CryptImageError,
     MAX_CRYPT_ATTEMPTS,
+    CryptImageError,
     is_auth_failure,
     prepare_source_image_with_validation,
     should_retry,

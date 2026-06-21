@@ -162,11 +162,11 @@ async def ac():
 
     import aiohttp
 
-    from dlsite_opds.core.auth import ClientPool, SourceImageLRU
     from dlsite_opds.app import app
+    from dlsite_opds.core.auth import ClientPool, SourceImageLRU
     from dlsite_opds.core.config import load_settings
-    from dlsite_opds.services.image_cache import ImageCache
     from dlsite_opds.core.progress import ProgressManager
+    from dlsite_opds.services.image_cache import ImageCache
 
     cfg = load_settings()
     app.state.settings = cfg

@@ -7,6 +7,7 @@ from unittest.mock import MagicMock
 import pytest
 from dlsite_async.work import AgeCategory, Work, WorkType
 
+from dlsite_opds.services.chapters import ChapterGroup
 from dlsite_opds.services.feeds import (
     ACQUISITION_TYPE,
     ATOM_NS,
@@ -18,10 +19,8 @@ from dlsite_opds.services.feeds import (
     build_navigation_feed,
     build_purchases_feed,
 )
-from dlsite_opds.services.chapters import ChapterGroup
 from dlsite_opds.services.libraries import (
     LIBRARIES,
-    Library,
     filter_purchases,
     get_library,
     prepare_opds_purchases,

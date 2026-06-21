@@ -5,7 +5,12 @@ import logging
 import mimetypes
 from dataclasses import dataclass
 
-from ..core.play_client import DlsiteClient, PurchaseList, WorkPageData, _find_epub_reflowable
+from ..core.play_client import (
+    DlsiteClient,
+    PurchaseList,
+    WorkPageData,
+    _find_epub_reflowable,
+)
 
 logger = logging.getLogger(__name__)
 

@@ -12,9 +12,8 @@ import threading
 from random import Random
 
 from cykooz.resizer import FilterType, ResizeAlg, ResizeOptions, Resizer
-from PIL import Image
-
 from dlsite_async.play.models import PlayFile
+from PIL import Image
 
 logger = logging.getLogger(__name__)
 

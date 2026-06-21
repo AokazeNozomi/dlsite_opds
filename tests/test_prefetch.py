@@ -7,8 +7,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from dlsite_opds.core.auth import SourceImageLRU
-from dlsite_opds.services.image_cache import ImageCache
 from dlsite_opds.routes.pages import prefetch_pages
+from dlsite_opds.services.image_cache import ImageCache
 
 from .conftest import FakePlayFile, make_jpeg
 
