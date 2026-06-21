@@ -20,6 +20,7 @@ class Settings:
     cover_concurrency: int = 4
     cover_fetch_retries: int = 3
     cover_retry_delay: float = 0.5
+    log_level: str = "INFO"
 
     @property
     def resolved_base_url(self) -> str:
@@ -59,4 +60,5 @@ def load_settings() -> Settings:
         cover_concurrency=int(os.getenv("DLSITE_OPDS_COVER_CONCURRENCY", "4")),
         cover_fetch_retries=int(os.getenv("DLSITE_OPDS_COVER_FETCH_RETRIES", "3")),
         cover_retry_delay=float(os.getenv("DLSITE_OPDS_COVER_RETRY_DELAY", "0.5")),
+        log_level=os.getenv("DLSITE_OPDS_LOG_LEVEL", "INFO").upper(),
     )

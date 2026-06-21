@@ -276,6 +276,7 @@ jobs:
           OPDS_PAGE_SIZE: ${{ vars.OPDS_PAGE_SIZE }}
           OPDS_IMAGE_CACHE_TTL: ${{ vars.OPDS_IMAGE_CACHE_TTL }}
           OPDS_PREFETCH_AHEAD: ${{ vars.OPDS_PREFETCH_AHEAD }}
+          OPDS_LOG_LEVEL: ${{ vars.OPDS_LOG_LEVEL }}
         run: |
           umask 077
           {
@@ -291,6 +292,7 @@ jobs:
             printf 'DLSITE_OPDS_PAGE_SIZE=%s\n' "${OPDS_PAGE_SIZE:-30}"
             printf 'DLSITE_OPDS_IMAGE_CACHE_TTL=%s\n' "${OPDS_IMAGE_CACHE_TTL:-86400}"
             printf 'DLSITE_OPDS_PREFETCH_AHEAD=%s\n' "${OPDS_PREFETCH_AHEAD:-5}"
+            printf 'DLSITE_OPDS_LOG_LEVEL=%s\n' "${OPDS_LOG_LEVEL:-INFO}"
           } > "${RUNNER_TEMP}/opds.env"
 
       - name: Sync deploy artifacts to VPS
