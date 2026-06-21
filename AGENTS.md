@@ -33,5 +33,12 @@ for the canonical run/test/endpoint reference and `.env.example` for config.
 - Demonstrating real content (purchase catalog, page streaming) requires a valid DLsite
   account and internet access. The `e2e`-marked tests (`pytest -m e2e`) auto-skip unless
   `DLSITE_LOGIN_ID` and `DLSITE_PASSWORD` are set; without them ~14 tests are skipped.
+- When credentials are set, login and catalog browsing work end-to-end (`/opds` and
+  `/opds/purchases` return valid Atom feeds with real entries). However, the page-image
+  download/streaming `e2e` tests currently fail for every work with a crypt-image
+  dimension mismatch (e.g. `got 1024x1280, expected 907x1280`) — the PSE descramble/
+  validation path, not the environment. Expect ~7 e2e failures of this kind; they are
+  independent of dependency setup. Several e2e tests also hardcode product IDs (e.g.
+  `RJ01459324`) that only exist in specific accounts.
 - Docker/Compose and the `infra/digitalocean` Caddy assets are for production deployment
   only and are not needed for local dev or testing.
