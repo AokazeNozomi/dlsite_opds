@@ -54,7 +54,8 @@ write_files:
             continue
           fi
 
-          printf '%s {\n    reverse_proxy %s:2580\n}\n\n' "$OPDS_DOMAIN" "$CONTAINER_NAME"
+          external_port="${OPDS_EXTERNAL_PORT:-2580}"
+          printf '%s:%s {\n    reverse_proxy %s:2580\n}\n\n' "$OPDS_DOMAIN" "$external_port" "$CONTAINER_NAME"
         done
       } > "$CADDYFILE"
 
