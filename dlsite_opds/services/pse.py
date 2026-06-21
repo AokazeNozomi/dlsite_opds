@@ -6,6 +6,7 @@ images can be processed entirely in memory without temp files.
 """
 
 import io
+import logging
 import math
 import threading
 from random import Random
@@ -14,6 +15,8 @@ from cykooz.resizer import FilterType, ResizeAlg, ResizeOptions, Resizer
 from PIL import Image
 
 from dlsite_async.play.models import PlayFile
+
+logger = logging.getLogger(__name__)
 
 _thread_local = threading.local()
 
@@ -170,6 +173,16 @@ def descramble_image(im: Image.Image, playfile: PlayFile) -> Image.Image:
 
     new_im = Image.new(im.mode, im.size)
     seed = _crypt_seed(playfile.optimized_name)
+    logger.debug(
+        "Descrambling %s: %dx%d tiles=%dx%d (%d) seed=%d",
+        playfile.optimized_name,
+        width,
+        height,
+        tiles_w,
+        tiles_h,
+        len(tiles),
+        seed,
+    )
     tile_order = _mt_tiles(seed, len(tiles))
     shuffle = {k: v for v, k in enumerate(tile_order)}
 
@@ -208,9 +221,29 @@ def prepare_source_image(
     playfile: PlayFile,
 ) -> Image.Image:
     """Decode, descramble (if encrypted), and normalise to RGB/L."""
-    im = Image.open(io.BytesIO(image_bytes))
+    try:
+        im = Image.open(io.BytesIO(image_bytes))
+    except Exception:
+        logger.exception(
+            "Failed to decode image (%d bytes, head=%r) for %s",
+            len(image_bytes),
+            image_bytes[:8],
+            getattr(playfile, "hashname", "?"),
+        )
+        raise
 
-    if _is_crypt_playfile(playfile):
+    is_crypt = _is_crypt_playfile(playfile)
+    logger.debug(
+        "prepare_source_image: bytes=%d decoded=%sx%s format=%s mode=%s crypt=%s",
+        len(image_bytes),
+        im.width,
+        im.height,
+        im.format,
+        im.mode,
+        is_crypt,
+    )
+
+    if is_crypt:
         im = descramble_image(im, playfile)
 
     if im.mode not in ("RGB", "L"):
@@ -239,6 +272,14 @@ def resize_and_encode(
             im = im.convert("RGB")
         ratio = max_width / im.width
         new_height = int(im.height * ratio)
+        logger.debug(
+            "Resizing %dx%d -> %dx%d (max_width=%d)",
+            im.width,
+            im.height,
+            max_width,
+            new_height,
+            max_width,
+        )
         dst = Image.new(im.mode, (max_width, new_height))
         _get_resizer().resize_pil(im, dst, _RESIZE_OPTIONS)
         im = dst

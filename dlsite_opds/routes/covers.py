@@ -50,6 +50,13 @@ async def _fetch_cover_upstream(
                 async with session.get(url, headers=CATALOG_IMAGE_HEADERS) as resp:
                     if resp.status != 200:
                         last_status = resp.status
+                        logger.warning(
+                            "Cover fetch attempt %d/%d returned HTTP %d for %s",
+                            attempt + 1,
+                            retries,
+                            resp.status,
+                            url,
+                        )
                         if attempt + 1 < retries:
                             await asyncio.sleep(retry_delay * (attempt + 1))
                             continue
@@ -99,29 +106,39 @@ async def cover_image(
     cached = cover_cache.get(product_id)
     if cached is not None:
         body, content_type = cached
+        logger.debug("Cover mem-cache HIT: product=%s bytes=%d", product_id, len(body))
         return _cover_response(body, content_type, request)
 
     disk_cached = await asyncio.to_thread(disk_cache.get_cover, product_id)
     if disk_cached is not None:
         body, content_type = disk_cached
         cover_cache[product_id] = (body, content_type)
+        logger.debug("Cover disk-cache HIT: product=%s bytes=%d", product_id, len(body))
         return _cover_response(body, content_type, request)
 
     purchases = await auth.client.get_purchases()
     work = next((w for w, _ in purchases if w.product_id == product_id), None)
     if not work or not work.work_image:
+        logger.warning("No cover image available for %s", product_id)
         raise HTTPException(status_code=404, detail="No cover image available")
 
     url = work.work_image
     if url.startswith("//"):
         url = "https:" + url
 
+    logger.debug("Cover cache MISS: product=%s — fetching %s", product_id, url)
     body, content_type = await _fetch_cover_upstream(
         session,
         url,
         semaphore,
         cfg.cover_fetch_retries,
         cfg.cover_retry_delay,
+    )
+    logger.debug(
+        "Cover fetched: product=%s bytes=%d content_type=%s",
+        product_id,
+        len(body),
+        content_type,
     )
 
     cover_cache[product_id] = (body, content_type)

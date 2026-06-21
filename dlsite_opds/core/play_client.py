@@ -220,6 +220,22 @@ class DlsiteClient:
                         tree, work_type=self._work_type_for(product_id)
                     )
                 all_files = _extract_all_files(tree)
+                logger.debug(
+                    "Resolved work %s: pages=%d chapters=%d (%s) all_files=%d",
+                    product_id,
+                    len(pages),
+                    len(chapters),
+                    [f"{ch.key}:{len(ch.pages)}" for ch in chapters],
+                    len(all_files),
+                )
+                if not pages:
+                    logger.warning(
+                        "Work %s resolved with 0 pages — not streamable "
+                        "(all_files=%d, file_types=%s)",
+                        product_id,
+                        len(all_files),
+                        sorted({pf.type for _, pf in all_files}),
+                    )
                 return WorkPageData(
                     page_count=len(pages),
                     pages=pages,
@@ -315,6 +331,9 @@ class DlsiteClient:
             )
         url = f"{token.url}optimized/{name}"
         headers = PLAY_IMAGE_HEADERS if use_image_headers else None
+        logger.debug(
+            "GET optimized file: name=%s image_headers=%s", name, use_image_headers
+        )
         async with self.api.get(
             url, timeout=self.api._DL_TIMEOUT, headers=headers
         ) as resp:
@@ -324,6 +343,15 @@ class DlsiteClient:
             else:
                 body = await resp.read()
                 content_type = resp.content_type or "application/octet-stream"
+                logger.debug(
+                    "GET optimized file done: name=%s status=%d content_type=%s "
+                    "content_length=%s bytes=%d",
+                    name,
+                    resp.status,
+                    content_type,
+                    content_length,
+                    len(body),
+                )
                 return body, content_type, resp.status, content_length
 
         bare_url = f"{token.url}{playfile.hashname}"
@@ -363,27 +391,60 @@ class DlsiteClient:
                     http_status=status,
                     content_length=content_length,
                 )
-                return body, playfile
-            except CryptImageError as exc:
                 logger.debug(
-                    "Crypt image attempt %d failed for %s HTTP %d: %s",
+                    "Crypt image OK on attempt %d for %s (product=%s) HTTP %d bytes=%d",
                     attempt + 1,
                     playfile.optimized_name,
+                    product_id,
                     status,
+                    len(body),
+                )
+                return body, playfile
+            except CryptImageError as exc:
+                logger.warning(
+                    "Crypt image attempt %d/%d failed for %s (product=%s) "
+                    "HTTP %d bytes=%d: %s",
+                    attempt + 1,
+                    MAX_CRYPT_ATTEMPTS,
+                    playfile.optimized_name,
+                    product_id,
+                    status,
+                    len(body),
                     exc,
                 )
                 last_err = exc
                 if not should_retry(attempt, MAX_CRYPT_ATTEMPTS):
                     break
                 if is_auth_failure(status):
+                    logger.debug(
+                        "Crypt retry: refreshing token after auth failure "
+                        "(product=%s, HTTP %d)",
+                        product_id,
+                        status,
+                    )
                     data = await self.refresh_download_token(product_id)
                     token = data.token  # type: ignore[assignment]
                 elif attempt == 0:
+                    logger.debug(
+                        "Crypt retry: re-downloading without token refresh "
+                        "(product=%s)",
+                        product_id,
+                    )
                     continue
                 else:
+                    logger.debug(
+                        "Crypt retry: refreshing token (product=%s)", product_id
+                    )
                     data = await self.refresh_download_token(product_id)
                     token = data.token  # type: ignore[assignment]
 
+        logger.error(
+            "Crypt image failed after %d attempts for %s (product=%s): %s",
+            MAX_CRYPT_ATTEMPTS,
+            playfile.optimized_name,
+            product_id,
+            last_err,
+        )
         raise last_err
 
     async def download_page_image(
@@ -402,16 +463,35 @@ class DlsiteClient:
             _path, playfile = pages[page_index]
             is_crypt = bool(playfile.files.get("optimized", {}).get("crypt", False))
             use_image_headers = self._is_image_playfile(playfile)
+            logger.debug(
+                "download_page_image: product=%s page=%d path=%s type=%s "
+                "crypt=%s image_headers=%s",
+                product_id,
+                page_index,
+                _path,
+                playfile.type,
+                is_crypt,
+                use_image_headers,
+            )
 
             if is_crypt:
                 return await self._download_crypt_page_image(
                     product_id, data.token, playfile  # type: ignore[arg-type]
                 )
 
-            body, _ctype, _status, _clen = await self._download_playfile(
+            body, ctype, status, clen = await self._download_playfile(
                 data.token,  # type: ignore[arg-type]
                 playfile,
                 use_image_headers=use_image_headers,
+            )
+            logger.debug(
+                "download_page_image done: product=%s page=%d status=%d "
+                "content_type=%s bytes=%d",
+                product_id,
+                page_index,
+                status,
+                ctype,
+                len(body),
             )
             return body, playfile
 
