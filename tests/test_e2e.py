@@ -8,6 +8,7 @@ environment variables (or ``.env``).  Run with::
 Skipped automatically when credentials are absent.
 """
 
+import asyncio
 import logging
 import os
 import xml.etree.ElementTree as ET
@@ -161,11 +162,11 @@ async def ac():
 
     import aiohttp
 
-    from dlsite_opds.core.auth import ClientPool, SourceImageLRU
     from dlsite_opds.app import app
+    from dlsite_opds.core.auth import ClientPool, SourceImageLRU
     from dlsite_opds.core.config import load_settings
-    from dlsite_opds.services.image_cache import ImageCache
     from dlsite_opds.core.progress import ProgressManager
+    from dlsite_opds.services.image_cache import ImageCache
 
     cfg = load_settings()
     app.state.settings = cfg
@@ -177,6 +178,7 @@ async def ac():
         max_workers=2, thread_name_prefix="img-test",
     )
     app.state.prefetch_inflight = set()
+    app.state.cover_semaphore = asyncio.Semaphore(cfg.cover_concurrency)
     app.state.cover_session = aiohttp.ClientSession()
     app.state.cover_cache = {}
     log.info("HTTP test client ready (app.state initialised)")

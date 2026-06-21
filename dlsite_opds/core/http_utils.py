@@ -26,6 +26,13 @@ PLAY_IMAGE_HEADERS = {
     "Accept": "image/webp,image/apng,image/*,*/*;q=0.8",
 }
 
+# Catalog cover images are served from www/img.dlsite, not Play CDN.
+CATALOG_IMAGE_HEADERS = {
+    "User-Agent": PLAY_IMAGE_USER_AGENT,
+    "Referer": "https://www.dlsite.com/",
+    "Accept": "image/webp,image/apng,image/*,*/*;q=0.8",
+}
+
 background_tasks: set[asyncio.Task[None]] = set()
 
 

@@ -6,8 +6,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from dlsite_async.work import AgeCategory, Work
 
-from dlsite_opds.services.chapters import ChapterGroup
 from dlsite_opds.core.play_client import WorkPageData
+from dlsite_opds.services.chapters import ChapterGroup
 from dlsite_opds.services.work_resolver import resolve_work_metadata
 
 

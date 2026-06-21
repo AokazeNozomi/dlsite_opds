@@ -125,6 +125,23 @@ write_files:
       docker compose -f docker-compose.app.yml pull
       docker compose -f docker-compose.app.yml up -d
       docker image prune -f --filter "until=72h"
+
+      for attempt in {1..12}; do
+        if docker inspect -f '{{.State.Running}}' "$CONTAINER_NAME" 2>/dev/null | grep -qx true; then
+          if docker exec "$CONTAINER_NAME" python -c \
+            "import urllib.request; urllib.request.urlopen('http://localhost:2580/healthz')"; then
+            break
+          fi
+        fi
+        if [ "$attempt" -eq 12 ]; then
+          echo "App container did not become healthy after deploy" >&2
+          docker ps -a --filter "name=$CONTAINER_NAME" || true
+          docker logs --tail 200 "$CONTAINER_NAME" 2>&1 || true
+          exit 1
+        fi
+        sleep 2
+      done
+
       docker logs --tail 100 "$CONTAINER_NAME"
 
   - path: /etc/sudoers.d/dlsite-opds-deploy

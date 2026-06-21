@@ -5,7 +5,12 @@ import logging
 import mimetypes
 from dataclasses import dataclass
 
-from ..core.play_client import DlsiteClient, PurchaseList, WorkPageData, _find_epub_reflowable
+from ..core.play_client import (
+    DlsiteClient,
+    PurchaseList,
+    WorkPageData,
+    _find_epub_reflowable,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -105,12 +110,30 @@ async def resolve_work_metadata(
                 logger.debug("Page-data fetch failed for %s", pid, exc_info=True)
                 return pid, None
 
+    logger.debug(
+        "Resolving metadata: %d works (%d cached, %d to fetch)",
+        len(page_slice),
+        len(page_slice) - len(missing),
+        len(missing),
+    )
     fetched = await asyncio.gather(*[_fetch_one(pid) for pid in missing])
     for pid, data in fetched:
         if data is None:
             continue
         _classify(pid, data)
 
+    logger.debug(
+        "Resolved metadata: %d streamable (page_counts), %d file-only, "
+        "%d multi-chapter, %d with no content",
+        len(page_counts),
+        len(file_links),
+        len(chapter_counts),
+        sum(
+            1
+            for w, _ in page_slice
+            if w.product_id not in page_counts and w.product_id not in file_links
+        ),
+    )
     return ResolvedWorkInfo(
         page_counts=page_counts,
         file_links=file_links,

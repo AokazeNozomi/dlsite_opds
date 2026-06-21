@@ -115,34 +115,62 @@ class TestResizeAndEncode:
 
 
 class TestCryptValidation:
-    def test_validate_accepts_matching_crypt_image(self) -> None:
-        src = make_jpeg(800, 600)
-        pf = FakePlayFile(crypt=True, width=800, height=600)
+    def test_validate_accepts_tile_aligned_crypt_image(self) -> None:
+        # 768x640 is already a whole number of 128px tiles (6 x 5).
+        src = make_jpeg(768, 640)
+        pf = FakePlayFile(crypt=True, width=768, height=640)
+        validate_crypt_image(src, pf, http_status=200, content_length=1000)  # type: ignore[arg-type]
+
+    def test_validate_accepts_tile_padded_crypt_image(self) -> None:
+        # Crypt images are served padded up to whole 128px tiles: a 907px-wide
+        # page is delivered as a 1024px (8 * 128) scrambled JPEG.
+        src = make_jpeg(1024, 1280)
+        pf = FakePlayFile(crypt=True, width=907, height=1280)
         validate_crypt_image(src, pf, http_status=200, content_length=1000)  # type: ignore[arg-type]
 
     def test_validate_rejects_http_error(self) -> None:
-        src = make_jpeg(800, 600)
-        pf = FakePlayFile(crypt=True, width=800, height=600)
+        src = make_jpeg(768, 640)
+        pf = FakePlayFile(crypt=True, width=768, height=640)
         with pytest.raises(CryptImageError, match="HTTP 403"):
             validate_crypt_image(src, pf, http_status=403)  # type: ignore[arg-type]
 
+    def test_validate_rejects_non_image_content_type(self) -> None:
+        src = make_jpeg(768, 640)
+        pf = FakePlayFile(crypt=True, width=768, height=640)
+        with pytest.raises(CryptImageError, match="non-image Content-Type"):
+            validate_crypt_image(src, pf, content_type="text/html")  # type: ignore[arg-type]
+
+    def test_validate_rejects_html_error_body(self) -> None:
+        body = b"<!DOCTYPE html><html><body>Forbidden</body></html>"
+        pf = FakePlayFile(crypt=True, width=768, height=640)
+        with pytest.raises(CryptImageError, match="not a recognised image"):
+            validate_crypt_image(body, pf)  # type: ignore[arg-type]
+
+    def test_validate_rejects_truncated_image(self) -> None:
+        src = make_jpeg(768, 640)
+        truncated = src[: len(src) // 2]  # valid JPEG header, missing pixel data
+        pf = FakePlayFile(crypt=True, width=768, height=640)
+        with pytest.raises(CryptImageError, match="failed to decode"):
+            validate_crypt_image(truncated, pf)  # type: ignore[arg-type]
+
     def test_validate_rejects_dimension_mismatch(self) -> None:
         src = make_jpeg(400, 300)
-        pf = FakePlayFile(crypt=True, width=800, height=600)
+        pf = FakePlayFile(crypt=True, width=768, height=640)
         with pytest.raises(CryptImageError, match="dimension mismatch"):
             validate_crypt_image(src, pf)  # type: ignore[arg-type]
 
     def test_validate_rejects_zero_dimensions(self) -> None:
-        pf = FakePlayFile(crypt=True, width=800, height=600)
+        src = make_jpeg(768, 640)  # valid magic bytes so it reaches the decode step
+        pf = FakePlayFile(crypt=True, width=768, height=640)
         fake_im = MagicMock()
         fake_im.size = (0, 0)
         with patch("dlsite_opds.services.pse.Image.open", return_value=fake_im):
             with pytest.raises(CryptImageError, match="zero dimensions"):
-                validate_crypt_image(b"dummy", pf)  # type: ignore[arg-type]
+                validate_crypt_image(src, pf)  # type: ignore[arg-type]
 
     def test_validate_rejects_short_content_length(self) -> None:
-        src = make_jpeg(800, 600)
-        pf = FakePlayFile(crypt=True, width=800, height=600)
+        src = make_jpeg(768, 640)
+        pf = FakePlayFile(crypt=True, width=768, height=640)
         with pytest.raises(CryptImageError, match="Content-Length"):
             validate_crypt_image(src, pf, content_length=50)  # type: ignore[arg-type]
 
@@ -151,11 +179,18 @@ class TestCryptValidation:
         pf = FakePlayFile(crypt=False, width=800, height=600)
         validate_crypt_image(src, pf, http_status=500)  # type: ignore[arg-type]
 
-    def test_descramble_rejects_wrong_input_dimensions(self) -> None:
+    def test_descramble_rejects_image_smaller_than_expected(self) -> None:
         im = Image.new("RGB", (400, 300))
         pf = FakePlayFile(crypt=True, width=800, height=600)
-        with pytest.raises(CryptImageError, match="do not match expected"):
+        with pytest.raises(CryptImageError, match="smaller than"):
             descramble_image(im, pf)  # type: ignore[arg-type]
+
+    def test_descramble_crops_tile_padded_image_to_metadata(self) -> None:
+        # 907px page padded to 1024px (8 tiles) must descramble and crop back.
+        im = Image.new("RGB", (1024, 1280))
+        pf = FakePlayFile(crypt=True, width=907, height=1280)
+        result = descramble_image(im, pf)  # type: ignore[arg-type]
+        assert result.size == (907, 1280)
 
     def test_descramble_rejects_short_optimized_name(self) -> None:
         im = Image.new("RGB", (800, 600))

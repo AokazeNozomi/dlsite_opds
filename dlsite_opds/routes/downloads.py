@@ -8,15 +8,14 @@ import zipfile
 from concurrent.futures import ThreadPoolExecutor
 
 import aiohttp
+from dlsite_async import Work
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response
 
-from dlsite_async import Work
-
 from ..core.auth import AuthContext, get_auth
-from ..services.cbz import build_comic_info
 from ..core.http_utils import content_disposition, ext_for_content_type
 from ..core.play_client import DlsiteClient, WorkPageData, _find_epub_reflowable
+from ..services.cbz import build_comic_info
 from ..services.pse import process_page_image
 
 logger = logging.getLogger(__name__)

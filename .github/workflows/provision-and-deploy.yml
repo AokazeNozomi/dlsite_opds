@@ -20,6 +20,7 @@ jobs:
           python-version: "3.13"
           cache: pip
       - run: pip install -e ".[test]"
+      - run: ruff check .
       - run: pytest
 
   gate:
@@ -58,6 +59,37 @@ jobs:
           tags: type=ref,event=branch
 
       - uses: docker/build-push-action@v7
+        id: build
+        with:
+          context: .
+          push: false
+          load: true
+          platforms: linux/amd64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke-run image
+        run: |
+          set -euo pipefail
+          IMAGE=$(echo "${{ steps.meta.outputs.tags }}" | head -n1)
+          docker run -d --name opds-smoke -e DLSITE_OPDS_DATA_DIR=/tmp/data \
+            -p 2580:2580 "$IMAGE"
+          for i in {1..20}; do
+            if curl -fsS http://localhost:2580/healthz | grep -qx ok; then
+              echo "healthy"
+              docker rm -f opds-smoke
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "container did not become healthy" >&2
+          docker logs opds-smoke || true
+          docker rm -f opds-smoke
+          exit 1
+
+      - uses: docker/build-push-action@v7
         with:
           context: .
           push: true
@@ -65,7 +97,6 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
-          cache-to: type=gha,mode=max
 
   discover:
     needs: build-and-push
@@ -276,8 +307,24 @@ jobs:
           OPDS_PAGE_SIZE: ${{ vars.OPDS_PAGE_SIZE }}
           OPDS_IMAGE_CACHE_TTL: ${{ vars.OPDS_IMAGE_CACHE_TTL }}
           OPDS_PREFETCH_AHEAD: ${{ vars.OPDS_PREFETCH_AHEAD }}
+          OPDS_LOG_LEVEL: ${{ vars.OPDS_LOG_LEVEL }}
         run: |
           umask 077
+          # Feed links (covers, PSE streams) are absolute URLs built from the
+          # base URL. The public listener runs on a non-standard port, so the
+          # base URL must include it or clients resolve links to the wrong port
+          # (e.g. covers hitting :443 where nothing listens).
+          base_url="${DLSITE_OPDS_BASE_URL%/}"
+          case "${base_url}" in
+            *:[0-9]*) ;;
+            *)
+              if [ -n "${OPDS_EXTERNAL_PORT}" ] \
+                && [ "${OPDS_EXTERNAL_PORT}" != "80" ] \
+                && [ "${OPDS_EXTERNAL_PORT}" != "443" ]; then
+                base_url="${base_url}:${OPDS_EXTERNAL_PORT}"
+              fi
+              ;;
+          esac
           {
             printf 'OPDS_DOMAIN=%s\n' "${OPDS_DOMAIN}"
             printf 'CONTAINER_NAME=%s\n' "${CONTAINER_NAME}"
@@ -286,11 +333,12 @@ jobs:
             printf 'DLSITE_OPDS_HOST=0.0.0.0\n'
             printf 'DLSITE_OPDS_PORT=2580\n'
             printf 'DLSITE_OPDS_DATA_DIR=/data\n'
-            printf 'DLSITE_OPDS_BASE_URL=%s\n' "${DLSITE_OPDS_BASE_URL}"
+            printf 'DLSITE_OPDS_BASE_URL=%s\n' "${base_url}"
             printf 'DLSITE_OPDS_CACHE_TTL=%s\n' "${OPDS_CACHE_TTL:-300}"
             printf 'DLSITE_OPDS_PAGE_SIZE=%s\n' "${OPDS_PAGE_SIZE:-30}"
             printf 'DLSITE_OPDS_IMAGE_CACHE_TTL=%s\n' "${OPDS_IMAGE_CACHE_TTL:-86400}"
             printf 'DLSITE_OPDS_PREFETCH_AHEAD=%s\n' "${OPDS_PREFETCH_AHEAD:-5}"
+            printf 'DLSITE_OPDS_LOG_LEVEL=%s\n' "${OPDS_LOG_LEVEL:-INFO}"
           } > "${RUNNER_TEMP}/opds.env"
 
       - name: Sync deploy artifacts to VPS
@@ -343,7 +391,9 @@ jobs:
           done
           echo "Timed out waiting for OPDS on port ${OPDS_EXTERNAL_PORT}" >&2
           ssh -i ~/.ssh/opds_deploy_key deploy@"${OPDS_HOST}" \
-            "echo '--- Caddyfile ---' && cat '${CADDY_PATH}/Caddyfile' && \
-             echo '--- docker compose ps ---' && docker compose -f '${CADDY_PATH}/docker-compose.caddy.yml' ps && \
+            "echo '--- app container ---' && docker ps -a --filter name='${CONTAINER_NAME}' && \
+             echo '--- app logs ---' && docker logs --tail 200 '${CONTAINER_NAME}' 2>&1 || true && \
+             echo '--- Caddyfile ---' && cat '${CADDY_PATH}/Caddyfile' && \
+             echo '--- caddy ps ---' && docker compose -f '${CADDY_PATH}/docker-compose.caddy.yml' ps && \
              echo '--- published ports ---' && docker port dlsite-opds-caddy || true"
           exit 1

@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import time
 from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -10,13 +11,48 @@ from fastapi.responses import Response
 from ..core.auth import AuthContext, SourceImageLRU, get_auth
 from ..core.config import Settings
 from ..core.http_utils import jpeg_response, spawn_background
-from ..services.image_cache import ImageCache
 from ..core.play_client import DlsiteClient
+from ..services.image_cache import ImageCache
 from ..services.pse import prepare_source_image, resize_and_encode
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+async def _prepare_page_source(
+    loop: asyncio.AbstractEventLoop,
+    executor: ThreadPoolExecutor,
+    image_bytes: bytes,
+    playfile: object,
+) -> object:
+    """Decode/descramble a page; map processing errors to HTTP 502."""
+    try:
+        return await loop.run_in_executor(
+            executor, prepare_source_image, image_bytes, playfile
+        )
+    except Exception as exc:
+        logger.exception("Failed to prepare page source image")
+        raise HTTPException(
+            status_code=502, detail="Image processing failed"
+        ) from exc
+
+
+async def _encode_page_jpeg(
+    loop: asyncio.AbstractEventLoop,
+    executor: ThreadPoolExecutor,
+    source_im: object,
+    max_width: int | None,
+) -> bytes:
+    try:
+        return await loop.run_in_executor(
+            executor, resize_and_encode, source_im, max_width
+        )
+    except Exception as exc:
+        logger.exception("Failed to encode page JPEG")
+        raise HTTPException(
+            status_code=502, detail="Image processing failed"
+        ) from exc
 
 
 async def prefetch_pages(
@@ -65,12 +101,16 @@ async def prefetch_pages(
             await asyncio.to_thread(
                 cache.put, product_id, pg, max_width, jpeg, chapter
             )
+            logger.debug(
+                "Prefetched page %d of %s (chapter=%s)", pg, product_id, chapter
+            )
         except Exception:
             logger.debug(
                 "Prefetch page %d of %s (chapter=%s) failed",
                 pg,
                 product_id,
                 chapter,
+                exc_info=True,
             )
         finally:
             inflight.discard(key)
@@ -118,6 +158,15 @@ async def pse_page(
     source_cache: SourceImageLRU = request.app.state.source_cache
     executor: ThreadPoolExecutor = request.app.state.image_executor
     loop = asyncio.get_running_loop()
+    started = time.perf_counter()
+
+    logger.debug(
+        "PSE request: product=%s page=%d width=%s chapter=%s",
+        product_id,
+        page,
+        max_width,
+        chapter,
+    )
 
     try:
         data = await auth.client.ensure_valid_token(product_id)
@@ -125,27 +174,45 @@ async def pse_page(
         logger.exception("Failed to resolve work data for %s", product_id)
         raise HTTPException(status_code=502, detail="Upstream download failed")
 
-    if len(data.chapters) > 1 and chapter is None:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "chapter query parameter is required for multi-chapter works; "
-                f"available chapters: {[ch.key for ch in data.chapters]}"
-            ),
-        )
+    logger.debug(
+        "PSE work resolved: product=%s chapters=%d total_pages=%d",
+        product_id,
+        len(data.chapters),
+        data.page_count,
+    )
 
-    if chapter is not None:
-        try:
-            chapter_pages = data.pages_for_chapter(chapter)
-        except KeyError:
-            raise HTTPException(status_code=404, detail="Chapter not found")
-        if page < 0 or page >= len(chapter_pages):
-            raise HTTPException(status_code=404, detail="Page not found")
+    try:
+        chapter_pages = data.pages_for_chapter(chapter)
+    except KeyError:
+        logger.warning(
+            "PSE chapter not found: product=%s chapter=%s available=%s",
+            product_id,
+            chapter,
+            [ch.key for ch in data.chapters],
+        )
+        raise HTTPException(status_code=404, detail="Chapter not found")
+    if page < 0 or page >= len(chapter_pages):
+        logger.warning(
+            "PSE page out of range: product=%s page=%d chapter=%s page_count=%d",
+            product_id,
+            page,
+            chapter,
+            len(chapter_pages),
+        )
+        raise HTTPException(status_code=404, detail="Page not found")
 
     cached = await asyncio.to_thread(
         cache.get, product_id, page, max_width, chapter
     )
     if cached is not None:
+        logger.debug(
+            "PSE disk-cache HIT: product=%s page=%d width=%s chapter=%s bytes=%d",
+            product_id,
+            page,
+            max_width,
+            chapter,
+            len(cached),
+        )
         _maybe_prefetch(
             request, auth.client, product_id, page + 1, max_width, chapter
         )
@@ -154,6 +221,13 @@ async def pse_page(
     source_im = source_cache.get(product_id, page, chapter=chapter)
 
     if source_im is None:
+        logger.debug(
+            "PSE cache MISS: product=%s page=%d chapter=%s — downloading",
+            product_id,
+            page,
+            chapter,
+        )
+        dl_started = time.perf_counter()
         try:
             image_bytes, playfile = await auth.client.download_page_image(
                 product_id, page, chapter_key=chapter
@@ -171,13 +245,45 @@ async def pse_page(
             )
             raise HTTPException(status_code=502, detail="Upstream download failed")
 
-        source_im = await loop.run_in_executor(
-            executor, prepare_source_image, image_bytes, playfile
+        logger.debug(
+            "PSE downloaded: product=%s page=%d bytes=%d in %.0fms",
+            product_id,
+            page,
+            len(image_bytes),
+            (time.perf_counter() - dl_started) * 1000,
+        )
+
+        prep_started = time.perf_counter()
+        source_im = await _prepare_page_source(
+            loop, executor, image_bytes, playfile
+        )
+        logger.debug(
+            "PSE decoded: product=%s page=%d size=%sx%s mode=%s in %.0fms",
+            product_id,
+            page,
+            getattr(source_im, "width", "?"),
+            getattr(source_im, "height", "?"),
+            getattr(source_im, "mode", "?"),
+            (time.perf_counter() - prep_started) * 1000,
         )
         source_cache.put(product_id, page, source_im, chapter=chapter)
+    else:
+        logger.debug(
+            "PSE source-cache HIT: product=%s page=%d chapter=%s",
+            product_id,
+            page,
+            chapter,
+        )
 
-    jpeg = await loop.run_in_executor(
-        executor, resize_and_encode, source_im, max_width
+    enc_started = time.perf_counter()
+    jpeg = await _encode_page_jpeg(loop, executor, source_im, max_width)
+    logger.debug(
+        "PSE encoded: product=%s page=%d width=%s jpeg_bytes=%d in %.0fms",
+        product_id,
+        page,
+        max_width,
+        len(jpeg),
+        (time.perf_counter() - enc_started) * 1000,
     )
 
     await asyncio.to_thread(
@@ -188,4 +294,11 @@ async def pse_page(
         request, auth.client, product_id, page + 1, max_width, chapter
     )
 
+    logger.debug(
+        "PSE response: product=%s page=%d jpeg_bytes=%d total=%.0fms",
+        product_id,
+        page,
+        len(jpeg),
+        (time.perf_counter() - started) * 1000,
+    )
     return jpeg_response(jpeg, request)

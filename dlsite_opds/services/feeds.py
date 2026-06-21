@@ -256,12 +256,7 @@ def _work_entry(
     pid = work.product_id
     updated = _dt(purchase_date or work.regist_date)
     pc = page_counts.get(pid)
-    multi_chapter = bool(chapter_counts and chapter_counts.get(pid, 0) > 1)
-    pse_link = ""
-    if multi_chapter:
-        pse_link = _entry_chapter_subsection_link(pid, base_url)
-    elif pc:
-        pse_link = _entry_pse_link(pid, base_url, pc, progress.get(pid))
+    pse_link = _entry_pse_link(pid, base_url, pc, progress.get(pid)) if pc else ""
     return "".join([
         "  <entry>\n",
         _entry_metadata(pid, work.work_name, updated),
