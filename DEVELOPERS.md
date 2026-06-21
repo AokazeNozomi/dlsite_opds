@@ -110,8 +110,9 @@ uvicorn dlsite_opds.app:app --host 127.0.0.1 --port 2580
 
 ## Deployment (DigitalOcean)
 
-GitHub Actions deploys nightly (`main`) and prod (`prod`) on one droplet with
-shared Caddy TLS on ports `2580` / `2581`. Full setup: [INFRA.md](INFRA.md).
+GitHub Actions deploys nightly (`main`) and prod (`prod`) on one droplet.
+Caddy terminates TLS on **2581** (nightly) and **2580** (prod). Full setup:
+[INFRA.md](INFRA.md).
 
 ```text
 https://<your-domain>:2580/opds    # prod

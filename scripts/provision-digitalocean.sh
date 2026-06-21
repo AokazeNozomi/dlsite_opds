@@ -238,36 +238,8 @@ if [ -n "$DO_PROJECT_NAME" ]; then
   doctl projects resources assign "$project_id" --resource="do:droplet:${droplet_id}" >/dev/null
 fi
 
-echo "Listing Firewalls"
-firewalls_json="$(doctl compute firewall list --output json)"
-firewall_count="$(
-  jq -r --arg name "$DO_FIREWALL_NAME" '[.[] | select(.name == $name)] | length' <<< "$firewalls_json"
-)"
-
-if [ "$firewall_count" -gt 1 ]; then
-  echo "Found multiple DigitalOcean Firewalls named ${DO_FIREWALL_NAME}" >&2
-  exit 1
-fi
-
-inbound_rules="protocol:tcp,ports:22,address:0.0.0.0/0,address:::/0 protocol:tcp,ports:80,address:0.0.0.0/0,address:::/0 protocol:tcp,ports:443,address:0.0.0.0/0,address:::/0 protocol:tcp,ports:2580,address:0.0.0.0/0,address:::/0 protocol:tcp,ports:2581,address:0.0.0.0/0,address:::/0"
-outbound_rules="protocol:icmp,address:0.0.0.0/0,address:::/0 protocol:tcp,ports:all,address:0.0.0.0/0,address:::/0 protocol:udp,ports:all,address:0.0.0.0/0,address:::/0"
-
-if [ "$firewall_count" -eq 1 ]; then
-  firewall_id="$(jq -r --arg name "$DO_FIREWALL_NAME" '.[] | select(.name == $name) | .id' <<< "$firewalls_json")"
-  echo "Updating Firewall ${DO_FIREWALL_NAME}"
-  doctl compute firewall update "$firewall_id" \
-    --name "$DO_FIREWALL_NAME" \
-    --inbound-rules "$inbound_rules" \
-    --outbound-rules "$outbound_rules" \
-    --droplet-ids "$droplet_id"
-else
-  echo "Creating Firewall ${DO_FIREWALL_NAME}"
-  doctl compute firewall create \
-    --name "$DO_FIREWALL_NAME" \
-    --inbound-rules "$inbound_rules" \
-    --outbound-rules "$outbound_rules" \
-    --droplet-ids "$droplet_id"
-fi
+DO_DROPLET_NAME="$DO_DROPLET_NAME" DO_FIREWALL_NAME="$DO_FIREWALL_NAME" \
+  bash "$(dirname "$0")/ensure-firewall.sh"
 
 for attempt in {1..60}; do
   droplet_json="$(doctl compute droplet get "$droplet_id" --output json)"

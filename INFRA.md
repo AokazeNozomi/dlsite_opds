@@ -64,6 +64,9 @@ b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW
 | `DLSITE_OPDS_BASE_URL` | `https://opds-nightly.example.com:2581` |
 | `APP_PATH` | `/opt/dlsite-opds-nightly` |
 
+Deploy writes `OPDS_EXTERNAL_PORT=2581` into the slot `.env`. Caddy listens
+on `OPDS_DOMAIN:2581` and reverse-proxies to the app container on port 2580.
+
 ### `prod` environment
 
 | Variable | Example |
@@ -71,6 +74,9 @@ b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW
 | `OPDS_DOMAIN` | `opds.example.com` |
 | `DLSITE_OPDS_BASE_URL` | `https://opds.example.com:2580` |
 | `APP_PATH` | `/opt/dlsite-opds` |
+
+Deploy writes `OPDS_EXTERNAL_PORT=2580` into the slot `.env`. Caddy listens
+on `OPDS_DOMAIN:2580` and reverse-proxies to the app container on port 2580.
 
 ### DNS (both → same droplet IP)
 
@@ -139,7 +145,7 @@ doctl compute ssh-key delete <ssh-key-id>
 
 ## 3. SSH host key
 
-No passphrase — cloud-init writes this key for `sshd` at first boot with no prompt.
+No passphrase. Generate a dedicated host keypair:
 
 ```bash
 ssh-keygen -t ed25519 -C "dlsite-opds-host" -f dlsite-opds-host -N ""
@@ -147,9 +153,9 @@ ssh-keygen -t ed25519 -C "dlsite-opds-host" -f dlsite-opds-host -N ""
 
 Repository secrets: `SSH_HOST_PRIVATE_KEY`, `SSH_HOST_PUBLIC_KEY`
 
-Cloud-init writes this key for `sshd` at first boot only. If you rotate it:
-update GitHub secrets, delete the droplet only, re-run workflow. The DO deploy
-SSH key can stay.
+Cloud-init installs this key for `sshd` at first boot only. To rotate: update
+GitHub secrets, delete the droplet, re-run the workflow. The DO deploy SSH key
+can stay.
 
 ```bash
 doctl compute droplet delete <droplet-id> --force
@@ -213,8 +219,12 @@ Actions → **Provision and Deploy OPDS** → run (or push to `main`).
 2. Prod DNS A record → same IP
 3. Merge `prod` — deploy prod slot; Caddy picks up both domains
 
-Each `main`/`prod` run requires gate approval before the image is built and
-deployed.
+Each deploy:
+
+1. Builds and pushes the container image (after gate approval)
+2. Writes `.env` (including `OPDS_EXTERNAL_PORT`: **2580** for prod, **2581** for nightly)
+3. Syncs Caddy config and the reload script, opens firewall ports, deploys the app
+4. Verifies `https://$OPDS_DOMAIN:$OPDS_EXTERNAL_PORT/healthz`
 
 ```text
 https://opds-nightly.example.com:2581/opds    # nightly
@@ -246,14 +256,19 @@ ssh -i path/to/dlsite-opds-deploy deploy@203.0.113.10
 
 ### Troubleshooting
 
-| Symptom | Cause | Fix |
-| --- | --- | --- |
-| `REMOTE HOST IDENTIFICATION HAS CHANGED` | Host key secret ≠ droplet `sshd` key | [SSH host key](#3-ssh-host-key) |
-| `Permission denied (publickey)` | Deploy key secret ≠ droplet `authorized_keys` | [Deploy SSH key](#2-deploy-ssh-key) |
-| `DigitalOcean SSH key dlsite-opds-deploy exists with a different fingerprint` | GitHub public key ≠ DO SSH key | [Deploy SSH key](#2-deploy-ssh-key) |
+| Symptom | Fix |
+| --- | --- |
+| OPDS unreachable on `:2580`/`:2581` | Confirm DNS points at the droplet; re-run **Provision and Deploy OPDS** or `sudo /usr/local/bin/reload-dlsite-opds-caddy`; check the DO firewall allows the port |
+| `REMOTE HOST IDENTIFICATION HAS CHANGED` | [SSH host key](#3-ssh-host-key) |
+| `Permission denied (publickey)` | [Deploy SSH key](#2-deploy-ssh-key) |
+| `DigitalOcean SSH key dlsite-opds-deploy exists with a different fingerprint` | [Deploy SSH key](#2-deploy-ssh-key) |
 
-Provision is **skipped** when the droplet already exists. Cloud-init does not
-re-run; changing GitHub secrets alone does not update a live droplet.
+Re-deploying updates app containers, syncs the Caddy reload script, refreshes
+the firewall rules, and verifies `https://$OPDS_DOMAIN:$OPDS_EXTERNAL_PORT/healthz`.
+
+Provision is skipped when the droplet already exists; cloud-init does not
+re-run. Changing GitHub secrets alone does not update a live droplet — deploy
+or SSH in.
 
 Pin the host key when testing locally:
 
@@ -281,17 +296,23 @@ doctl compute droplet delete <droplet-id> --force
 doctl compute ssh-key delete <ssh-key-id>
 ```
 
-## Firewall on existing droplets
+## Firewall
 
-Provision is skipped if the droplet exists; firewall script changes won't apply.
-Delete droplet and re-run, or update firewall in DO console.
+Each deploy runs `scripts/ensure-firewall.sh`, which opens TCP **22**, **80**,
+**443**, **2580**, and **2581** on the droplet firewall (`dlsite-opds-ssh`).
 
 ## Restart
 
-**Restart OPDS** workflow (gate approval) restarts one app slot only.
+**Restart OPDS** (workflow dispatch, gate approval) restarts one app slot and
+reloads Caddy from the current `.env` files.
 
 Reload Caddy manually:
 
 ```bash
 sudo /usr/local/bin/reload-dlsite-opds-caddy
 ```
+
+The reload script lives at `infra/digitalocean/reload-dlsite-opds-caddy.sh` in
+the repo and is synced to `/opt/dlsite-opds-caddy/reload-dlsite-opds-caddy.sh`
+on each deploy. `/usr/local/bin/reload-dlsite-opds-caddy` is a wrapper that
+execs it (passwordless sudo for the deploy user).
