@@ -15,6 +15,7 @@ streaming.
 - **Resized pages** — smaller screens can request a narrower width
 - **Reading progress** — pick up where you left off
 - **Descrambling** — DLsite Play encrypted images decoded automatically
+- **Multi-chapter works** — folder/PDF chapters with per-chapter streaming
 
 ## Panels
 

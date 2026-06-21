@@ -46,17 +46,33 @@ class SourceImageLRU:
     """
 
     def __init__(self, capacity: int = 32) -> None:
-        self._data: OrderedDict[tuple[str, int], Image.Image] = OrderedDict()
+        self._data: OrderedDict[tuple[str, str, int], Image.Image] = OrderedDict()
         self._capacity = capacity
 
-    def get(self, key: tuple[str, int]) -> Image.Image | None:
+    @staticmethod
+    def _key(
+        product_id: str, page: int, chapter: str | None = None
+    ) -> tuple[str, str, int]:
+        return (product_id, chapter or "", page)
+
+    def get(
+        self, product_id: str, page: int, chapter: str | None = None
+    ) -> Image.Image | None:
+        key = self._key(product_id, page, chapter)
         try:
             self._data.move_to_end(key)
             return self._data[key]
         except KeyError:
             return None
 
-    def put(self, key: tuple[str, int], value: Image.Image) -> None:
+    def put(
+        self,
+        product_id: str,
+        page: int,
+        value: Image.Image,
+        chapter: str | None = None,
+    ) -> None:
+        key = self._key(product_id, page, chapter)
         self._data[key] = value
         self._data.move_to_end(key)
         while len(self._data) > self._capacity:

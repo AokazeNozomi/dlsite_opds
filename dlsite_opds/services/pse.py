@@ -17,6 +17,22 @@ from dlsite_async.play.models import PlayFile
 
 _thread_local = threading.local()
 
+MAX_CRYPT_ATTEMPTS = 3
+
+
+class CryptImageError(ValueError):
+    """Crypt image validation or descramble failed."""
+
+
+def is_auth_failure(status: int) -> bool:
+    """Return True when the CDN token or session likely expired."""
+    return status in (401, 403)
+
+
+def should_retry(attempt: int, max_attempts: int = MAX_CRYPT_ATTEMPTS) -> bool:
+    """Return True if another fetch attempt is allowed."""
+    return attempt + 1 < max_attempts
+
 
 def _get_resizer() -> Resizer:
     """Return a per-thread ``Resizer`` instance.
@@ -65,6 +81,67 @@ def _mt_tiles(seed: int, length: int) -> list[int]:
     return a
 
 
+def _crypt_seed(optimized_name: str) -> int:
+    if len(optimized_name) < 12:
+        raise CryptImageError(
+            f"optimized_name too short for seed extraction: {optimized_name!r}"
+        )
+    seed_str = optimized_name[5:12]
+    try:
+        return int(seed_str, 16)
+    except ValueError as exc:
+        raise CryptImageError(
+            f"Invalid hex seed in optimized_name: {seed_str!r}"
+        ) from exc
+
+
+def _is_crypt_playfile(playfile: PlayFile) -> bool:
+    return bool(playfile.files.get("optimized", {}).get("crypt", False))
+
+
+# ---------------------------------------------------------------------------
+# Crypt image validation
+# ---------------------------------------------------------------------------
+
+def validate_crypt_image(
+    image_bytes: bytes,
+    playfile: PlayFile,
+    *,
+    http_status: int = 200,
+    content_length: int | None = None,
+) -> None:
+    """Validate a downloaded crypt image before descrambling."""
+    if not _is_crypt_playfile(playfile):
+        return
+
+    opt_name = playfile.optimized_name
+    optimized = playfile.files["optimized"]
+    width: int = optimized["width"]
+    height: int = optimized["height"]
+
+    if not (200 <= http_status < 300):
+        raise CryptImageError(
+            f"Crypt image download failed with HTTP {http_status} for {opt_name}"
+        )
+
+    im = Image.open(io.BytesIO(image_bytes))
+    img_w, img_h = im.size
+    if img_w == 0 or img_h == 0:
+        raise CryptImageError(f"Crypt image has zero dimensions for {opt_name}")
+    if img_w != width or img_h != height:
+        raise CryptImageError(
+            f"Crypt image dimension mismatch for {opt_name}: "
+            f"got {img_w}x{img_h}, expected {width}x{height}"
+        )
+
+    expected_len = optimized.get("length")
+    if expected_len and content_length is not None and content_length < expected_len:
+        raise CryptImageError(
+            f"Crypt image incomplete for {opt_name}: "
+            f"Content-Length {content_length} < expected {expected_len}"
+        )
+
+
 # ---------------------------------------------------------------------------
 # In-memory descramble
 # ---------------------------------------------------------------------------
@@ -75,6 +152,13 @@ def descramble_image(im: Image.Image, playfile: PlayFile) -> Image.Image:
     optimized = playfile.files["optimized"]
     width: int = optimized["width"]
     height: int = optimized["height"]
+
+    if im.size != (width, height):
+        raise CryptImageError(
+            f"Image dimensions {im.width}x{im.height} do not match "
+            f"expected {width}x{height}"
+        )
+
     tiles_w = math.ceil(width / tile_w)
     tiles_h = math.ceil(height / tile_w)
 
@@ -85,7 +169,7 @@ def descramble_image(im: Image.Image, playfile: PlayFile) -> Image.Image:
     ]
 
     new_im = Image.new(im.mode, im.size)
-    seed = int(playfile.optimized_name[5:12], 16)
+    seed = _crypt_seed(playfile.optimized_name)
     tile_order = _mt_tiles(seed, len(tiles))
     shuffle = {k: v for v, k in enumerate(tile_order)}
 
@@ -102,6 +186,23 @@ def descramble_image(im: Image.Image, playfile: PlayFile) -> Image.Image:
 # Page-image pipeline
 # ---------------------------------------------------------------------------
 
+def prepare_source_image_with_validation(
+    image_bytes: bytes,
+    playfile: PlayFile,
+    *,
+    http_status: int = 200,
+    content_length: int | None = None,
+) -> Image.Image:
+    """Decode and descramble a crypt page after validating download integrity."""
+    validate_crypt_image(
+        image_bytes,
+        playfile,
+        http_status=http_status,
+        content_length=content_length,
+    )
+    return prepare_source_image(image_bytes, playfile)
+
+
 def prepare_source_image(
     image_bytes: bytes,
     playfile: PlayFile,
@@ -109,7 +210,7 @@ def prepare_source_image(
     """Decode, descramble (if encrypted), and normalise to RGB/L."""
     im = Image.open(io.BytesIO(image_bytes))
 
-    if playfile.files.get("optimized", {}).get("crypt", False):
+    if _is_crypt_playfile(playfile):
         im = descramble_image(im, playfile)
 
     if im.mode not in ("RGB", "L"):
