@@ -30,6 +30,13 @@ write_files:
     permissions: "0755"
     content: |
       #!/usr/bin/env bash
+      exec /opt/dlsite-opds-caddy/reload-dlsite-opds-caddy.sh
+
+  - path: /opt/dlsite-opds-caddy/reload-dlsite-opds-caddy.sh
+    owner: deploy:deploy
+    permissions: "0755"
+    content: |
+      #!/usr/bin/env bash
       # Keep in sync with infra/digitalocean/reload-dlsite-opds-caddy.sh
       set -euo pipefail
 
@@ -37,7 +44,9 @@ write_files:
       CADDYFILE="$CADDY_DIR/Caddyfile"
 
       mkdir -p "$CADDY_DIR"
-      chown -R deploy:deploy "$CADDY_DIR"
+      if [ "$(id -u)" -eq 0 ]; then
+        chown -R deploy:deploy "$CADDY_DIR"
+      fi
 
       {
         for app_dir in /opt/dlsite-opds-nightly /opt/dlsite-opds; do

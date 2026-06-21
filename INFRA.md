@@ -313,5 +313,6 @@ sudo /usr/local/bin/reload-dlsite-opds-caddy
 ```
 
 The reload script lives at `infra/digitalocean/reload-dlsite-opds-caddy.sh` in
-the repo and is synced to `/usr/local/bin/reload-dlsite-opds-caddy` on each
-deploy.
+the repo and is synced to `/opt/dlsite-opds-caddy/reload-dlsite-opds-caddy.sh`
+on each deploy. `/usr/local/bin/reload-dlsite-opds-caddy` is a wrapper that
+execs it (passwordless sudo for the deploy user).

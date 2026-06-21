@@ -301,12 +301,11 @@ jobs:
             docker-compose.app.yml deploy@"${OPDS_HOST}":"${APP_PATH}/"
           rsync -az \
             -e "ssh -i ~/.ssh/opds_deploy_key" \
-            infra/digitalocean/docker-compose.caddy.yml deploy@"${OPDS_HOST}":"${CADDY_PATH}/"
-          scp -i ~/.ssh/opds_deploy_key \
+            infra/digitalocean/docker-compose.caddy.yml \
             infra/digitalocean/reload-dlsite-opds-caddy.sh \
-            deploy@"${OPDS_HOST}":/tmp/reload-dlsite-opds-caddy.sh
+            deploy@"${OPDS_HOST}":"${CADDY_PATH}/"
           ssh -i ~/.ssh/opds_deploy_key deploy@"${OPDS_HOST}" \
-            "sudo install -m 0755 /tmp/reload-dlsite-opds-caddy.sh /usr/local/bin/reload-dlsite-opds-caddy"
+            "chmod +x '${CADDY_PATH}/reload-dlsite-opds-caddy.sh'"
 
       - name: Write server environment
         run: |
@@ -324,6 +323,8 @@ jobs:
       - name: Deploy OPDS
         run: |
           ssh -i ~/.ssh/opds_deploy_key deploy@"${OPDS_HOST}" "sudo /usr/local/bin/deploy-dlsite-opds '${APP_PATH}'"
+          ssh -i ~/.ssh/opds_deploy_key deploy@"${OPDS_HOST}" \
+            "'${CADDY_PATH}/reload-dlsite-opds-caddy.sh'"
 
       - name: Verify OPDS on external port
         env:

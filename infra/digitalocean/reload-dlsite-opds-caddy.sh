@@ -6,7 +6,9 @@ CADDY_DIR=/opt/dlsite-opds-caddy
 CADDYFILE="$CADDY_DIR/Caddyfile"
 
 mkdir -p "$CADDY_DIR"
-chown -R deploy:deploy "$CADDY_DIR"
+if [ "$(id -u)" -eq 0 ]; then
+  chown -R deploy:deploy "$CADDY_DIR"
+fi
 
 {
   for app_dir in /opt/dlsite-opds-nightly /opt/dlsite-opds; do

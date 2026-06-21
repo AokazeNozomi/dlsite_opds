@@ -99,13 +99,11 @@ jobs:
           OPDS_HOST: ${{ steps.lookup.outputs.opds_host }}
           CADDY_PATH: /opt/dlsite-opds-caddy
         run: |
-          scp -i ~/.ssh/opds_deploy_key \
-            infra/digitalocean/reload-dlsite-opds-caddy.sh \
-            deploy@"${OPDS_HOST}":/tmp/reload-dlsite-opds-caddy.sh
           rsync -az \
             -e "ssh -i ~/.ssh/opds_deploy_key" \
             infra/digitalocean/docker-compose.caddy.yml \
+            infra/digitalocean/reload-dlsite-opds-caddy.sh \
             deploy@"${OPDS_HOST}":"${CADDY_PATH}/"
           ssh -i ~/.ssh/opds_deploy_key deploy@"${OPDS_HOST}" \
-            "sudo install -m 0755 /tmp/reload-dlsite-opds-caddy.sh /usr/local/bin/reload-dlsite-opds-caddy && \
-             sudo /usr/local/bin/reload-dlsite-opds-caddy"
+            "chmod +x '${CADDY_PATH}/reload-dlsite-opds-caddy.sh' && \
+             '${CADDY_PATH}/reload-dlsite-opds-caddy.sh'"
