@@ -30,6 +30,7 @@ write_files:
     permissions: "0755"
     content: |
       #!/usr/bin/env bash
+      # Keep in sync with infra/digitalocean/reload-dlsite-opds-caddy.sh
       set -euo pipefail
 
       CADDY_DIR=/opt/dlsite-opds-caddy
@@ -55,7 +56,8 @@ write_files:
           fi
 
           external_port="${OPDS_EXTERNAL_PORT:-2580}"
-          printf '%s:%s {\n    reverse_proxy %s:2580\n}\n\n' "$OPDS_DOMAIN" "$external_port" "$CONTAINER_NAME"
+          printf '%s:%s {\n    reverse_proxy %s:2580\n}\n\n' \
+            "$OPDS_DOMAIN" "$external_port" "$CONTAINER_NAME"
         done
       } > "$CADDYFILE"
 

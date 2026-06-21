@@ -218,6 +218,17 @@ jobs:
         with:
           ref: ${{ env.DEPLOY_BRANCH }}
 
+      - name: Install doctl
+        uses: digitalocean/action-doctl@v2.5.2
+        with:
+          token: ${{ secrets.DIGITALOCEAN_TOKEN }}
+          version: 1.159.0
+
+      - name: Ensure firewall allows OPDS ports
+        env:
+          DO_DROPLET_NAME: ${{ vars.DO_DROPLET_NAME || 'dlsite-opds' }}
+        run: bash scripts/ensure-firewall.sh
+
       - name: Configure SSH
         env:
           SSH_DEPLOY_PRIVATE_KEY: ${{ secrets.SSH_DEPLOY_PRIVATE_KEY }}
@@ -291,6 +302,11 @@ jobs:
           rsync -az \
             -e "ssh -i ~/.ssh/opds_deploy_key" \
             infra/digitalocean/docker-compose.caddy.yml deploy@"${OPDS_HOST}":"${CADDY_PATH}/"
+          scp -i ~/.ssh/opds_deploy_key \
+            infra/digitalocean/reload-dlsite-opds-caddy.sh \
+            deploy@"${OPDS_HOST}":/tmp/reload-dlsite-opds-caddy.sh
+          ssh -i ~/.ssh/opds_deploy_key deploy@"${OPDS_HOST}" \
+            "sudo install -m 0755 /tmp/reload-dlsite-opds-caddy.sh /usr/local/bin/reload-dlsite-opds-caddy"
 
       - name: Write server environment
         run: |
@@ -308,3 +324,21 @@ jobs:
       - name: Deploy OPDS
         run: |
           ssh -i ~/.ssh/opds_deploy_key deploy@"${OPDS_HOST}" "sudo /usr/local/bin/deploy-dlsite-opds '${APP_PATH}'"
+
+      - name: Verify OPDS on external port
+        env:
+          OPDS_DOMAIN: ${{ vars.OPDS_DOMAIN }}
+        run: |
+          set -euo pipefail
+          url="https://${OPDS_DOMAIN}:${OPDS_EXTERNAL_PORT}/healthz"
+          echo "Checking ${url}"
+          for attempt in {1..18}; do
+            if curl -fsS --connect-timeout 10 "${url}" | grep -qx ok; then
+              echo "OPDS reachable on port ${OPDS_EXTERNAL_PORT}"
+              exit 0
+            fi
+            echo "Waiting for ${url} (attempt ${attempt}/18)..."
+            sleep 10
+          done
+          echo "Timed out waiting for OPDS on port ${OPDS_EXTERNAL_PORT}" >&2
+          exit 1

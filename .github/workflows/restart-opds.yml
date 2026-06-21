@@ -70,6 +70,9 @@ jobs:
           echo "opds_host=${ip}" >> "${GITHUB_OUTPUT}"
           echo "Found active droplet at ${ip}"
 
+      - name: Check out repository
+        uses: actions/checkout@v5
+
       - name: Configure SSH
         env:
           SSH_DEPLOY_PRIVATE_KEY: ${{ secrets.SSH_DEPLOY_PRIVATE_KEY }}
@@ -86,6 +89,23 @@ jobs:
       - name: Restart OPDS containers
         env:
           OPDS_HOST: ${{ steps.lookup.outputs.opds_host }}
+          CADDY_PATH: /opt/dlsite-opds-caddy
         run: |
           ssh -i ~/.ssh/opds_deploy_key deploy@"${OPDS_HOST}" \
             "cd '${APP_PATH}' && docker compose -f docker-compose.app.yml restart && docker logs --tail 100 '${CONTAINER_NAME}'"
+
+      - name: Reload Caddy with current port config
+        env:
+          OPDS_HOST: ${{ steps.lookup.outputs.opds_host }}
+          CADDY_PATH: /opt/dlsite-opds-caddy
+        run: |
+          scp -i ~/.ssh/opds_deploy_key \
+            infra/digitalocean/reload-dlsite-opds-caddy.sh \
+            deploy@"${OPDS_HOST}":/tmp/reload-dlsite-opds-caddy.sh
+          rsync -az \
+            -e "ssh -i ~/.ssh/opds_deploy_key" \
+            infra/digitalocean/docker-compose.caddy.yml \
+            deploy@"${OPDS_HOST}":"${CADDY_PATH}/"
+          ssh -i ~/.ssh/opds_deploy_key deploy@"${OPDS_HOST}" \
+            "sudo install -m 0755 /tmp/reload-dlsite-opds-caddy.sh /usr/local/bin/reload-dlsite-opds-caddy && \
+             sudo /usr/local/bin/reload-dlsite-opds-caddy"
