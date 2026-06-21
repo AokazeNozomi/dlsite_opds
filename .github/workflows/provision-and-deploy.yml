@@ -310,6 +310,21 @@ jobs:
           OPDS_LOG_LEVEL: ${{ vars.OPDS_LOG_LEVEL }}
         run: |
           umask 077
+          # Feed links (covers, PSE streams) are absolute URLs built from the
+          # base URL. The public listener runs on a non-standard port, so the
+          # base URL must include it or clients resolve links to the wrong port
+          # (e.g. covers hitting :443 where nothing listens).
+          base_url="${DLSITE_OPDS_BASE_URL%/}"
+          case "${base_url}" in
+            *:[0-9]*) ;;
+            *)
+              if [ -n "${OPDS_EXTERNAL_PORT}" ] \
+                && [ "${OPDS_EXTERNAL_PORT}" != "80" ] \
+                && [ "${OPDS_EXTERNAL_PORT}" != "443" ]; then
+                base_url="${base_url}:${OPDS_EXTERNAL_PORT}"
+              fi
+              ;;
+          esac
           {
             printf 'OPDS_DOMAIN=%s\n' "${OPDS_DOMAIN}"
             printf 'CONTAINER_NAME=%s\n' "${CONTAINER_NAME}"
@@ -318,7 +333,7 @@ jobs:
             printf 'DLSITE_OPDS_HOST=0.0.0.0\n'
             printf 'DLSITE_OPDS_PORT=2580\n'
             printf 'DLSITE_OPDS_DATA_DIR=/data\n'
-            printf 'DLSITE_OPDS_BASE_URL=%s\n' "${DLSITE_OPDS_BASE_URL}"
+            printf 'DLSITE_OPDS_BASE_URL=%s\n' "${base_url}"
             printf 'DLSITE_OPDS_CACHE_TTL=%s\n' "${OPDS_CACHE_TTL:-300}"
             printf 'DLSITE_OPDS_PAGE_SIZE=%s\n' "${OPDS_PAGE_SIZE:-30}"
             printf 'DLSITE_OPDS_IMAGE_CACHE_TTL=%s\n' "${OPDS_IMAGE_CACHE_TTL:-86400}"
