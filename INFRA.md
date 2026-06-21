@@ -1,7 +1,8 @@
 # Infrastructure Setup
 
-One DigitalOcean droplet runs nightly and prod side-by-side. Shared Caddy on
-`:80`/`:443` routes by hostname. `main` → nightly slot; `main → prod` PR → prod slot.
+One DigitalOcean droplet runs nightly and prod side-by-side. Shared Caddy
+terminates TLS: OPDS on `:2580` / `:2581` (prod / nightly); `:443` reserved
+for a website. `main` → nightly slot; `main → prod` PR → prod slot.
 
 GitHub env names stay `dev` / `dev-gate`; on-droplet naming uses **nightly**.
 
@@ -60,7 +61,7 @@ b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW
 | Variable | Example |
 | --- | --- |
 | `OPDS_DOMAIN` | `opds-nightly.example.com` |
-| `DLSITE_OPDS_BASE_URL` | `https://opds-nightly.example.com` |
+| `DLSITE_OPDS_BASE_URL` | `https://opds-nightly.example.com:2581` |
 | `APP_PATH` | `/opt/dlsite-opds-nightly` |
 
 ### `prod` environment
@@ -68,7 +69,7 @@ b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW
 | Variable | Example |
 | --- | --- |
 | `OPDS_DOMAIN` | `opds.example.com` |
-| `DLSITE_OPDS_BASE_URL` | `https://opds.example.com` |
+| `DLSITE_OPDS_BASE_URL` | `https://opds.example.com:2580` |
 | `APP_PATH` | `/opt/dlsite-opds` |
 
 ### DNS (both → same droplet IP)
@@ -163,7 +164,8 @@ Point nightly and prod A records at the same droplet IP (see [Example values](#e
 
 On **`dev`** — required vars with examples in the table above.
 
-On **`prod`** — same vars, prod domain (e.g. `opds.example.com` / `https://opds.example.com`).
+On **`prod`** — same vars, prod domain (e.g. `opds.example.com` /
+`https://opds.example.com:2580`).
 
 Cert retry if LE fails after DNS propagation:
 
@@ -214,15 +216,15 @@ Actions → **Provision and Deploy OPDS** → run (or push to `main`).
 Each `main`/`prod` deploy requires gate approval.
 
 ```text
-https://opds-nightly.example.com/opds    # nightly
-https://opds.example.com/opds            # prod
-curl https://opds-nightly.example.com/healthz
+https://opds-nightly.example.com:2581/opds    # nightly
+https://opds.example.com:2580/opds            # prod
+curl https://opds.example.com:2580/healthz
 ```
 
 ## Prod promotion
 
 1. Create `prod-gate` (reviewers) and `prod` envs
-2. On `prod`: set `OPDS_DOMAIN` / `DLSITE_OPDS_BASE_URL` (e.g. `opds.example.com`, `https://opds.example.com`)
+2. On `prod`: set `OPDS_DOMAIN` / `DLSITE_OPDS_BASE_URL` (e.g. `opds.example.com`, `https://opds.example.com:2580`)
 3. Branch `prod` from `main`; protect `prod` (PR required; optional: require `dev` deployment)
 
 Flow: PR → `main` → nightly deploy → PR `main → prod` → prod deploy.

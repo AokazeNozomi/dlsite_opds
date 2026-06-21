@@ -249,7 +249,7 @@ if [ "$firewall_count" -gt 1 ]; then
   exit 1
 fi
 
-inbound_rules="protocol:tcp,ports:22,address:0.0.0.0/0,address:::/0 protocol:tcp,ports:80,address:0.0.0.0/0,address:::/0 protocol:tcp,ports:443,address:0.0.0.0/0,address:::/0"
+inbound_rules="protocol:tcp,ports:22,address:0.0.0.0/0,address:::/0 protocol:tcp,ports:80,address:0.0.0.0/0,address:::/0 protocol:tcp,ports:443,address:0.0.0.0/0,address:::/0 protocol:tcp,ports:2580,address:0.0.0.0/0,address:::/0 protocol:tcp,ports:2581,address:0.0.0.0/0,address:::/0"
 outbound_rules="protocol:icmp,address:0.0.0.0/0,address:::/0 protocol:tcp,ports:all,address:0.0.0.0/0,address:::/0 protocol:udp,ports:all,address:0.0.0.0/0,address:::/0"
 
 if [ "$firewall_count" -eq 1 ]; then
