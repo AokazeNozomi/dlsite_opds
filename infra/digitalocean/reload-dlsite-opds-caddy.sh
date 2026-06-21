@@ -10,6 +10,7 @@ if [ "$(id -u)" -eq 0 ]; then
   chown -R deploy:deploy "$CADDY_DIR"
 fi
 
+tmp="$(mktemp "$CADDY_DIR/Caddyfile.XXXXXX")"
 {
   for app_dir in /opt/dlsite-opds-nightly /opt/dlsite-opds; do
     if [ ! -s "$app_dir/.env" ]; then
@@ -30,12 +31,15 @@ fi
     printf '%s:%s {\n    reverse_proxy %s:2580\n}\n\n' \
       "$OPDS_DOMAIN" "$external_port" "$CONTAINER_NAME"
   done
-} > "$CADDYFILE"
+} > "$tmp"
 
-if [ ! -s "$CADDYFILE" ]; then
+if [ ! -s "$tmp" ]; then
+  rm -f "$tmp"
   echo "No app environments configured; refusing to start Caddy." >&2
   exit 1
 fi
+
+mv -f "$tmp" "$CADDYFILE"
 
 cd "$CADDY_DIR"
 docker compose -f docker-compose.caddy.yml up -d

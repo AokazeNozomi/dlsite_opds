@@ -238,17 +238,6 @@ if [ -n "$DO_PROJECT_NAME" ]; then
   doctl projects resources assign "$project_id" --resource="do:droplet:${droplet_id}" >/dev/null
 fi
 
-echo "Listing Firewalls"
-firewalls_json="$(doctl compute firewall list --output json)"
-firewall_count="$(
-  jq -r --arg name "$DO_FIREWALL_NAME" '[.[] | select(.name == $name)] | length' <<< "$firewalls_json"
-)"
-
-if [ "$firewall_count" -gt 1 ]; then
-  echo "Found multiple DigitalOcean Firewalls named ${DO_FIREWALL_NAME}" >&2
-  exit 1
-fi
-
 DO_DROPLET_NAME="$DO_DROPLET_NAME" DO_FIREWALL_NAME="$DO_FIREWALL_NAME" \
   bash "$(dirname "$0")/ensure-firewall.sh"
 
